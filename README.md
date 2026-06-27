@@ -11,7 +11,6 @@ Checkpoint cached on a Modal Volume, seeded from Zenodo.
 modal_app/app.py                     Serving app (GPU class + HTTP endpoint)
 scripts/setup_checkpoint_volume.py   Seeds the checkpoint volume
 scripts/test_endpoint.py             CLI test client
-web/convert.html                     Public converter tool (no key, rate-limited)
 web/index.html                       Browser test client (keyed)
 web/admin.html                       Admin: generate/revoke keys, approve requests
 web/request-access.html              Form to request a keyed API account
@@ -32,15 +31,9 @@ CORS is open (`*`).
 
 ## API
 
-Two access tiers:
-
-- **Public, unkeyed** — `POST /convert-public`, rate-limited to 5
-  conversions/day per IP. Backs `web/convert.html`.
-- **Keyed** — `POST /transcribe`, header `X-API-Key: <key>`, unlimited.
-  For partner integrations (e.g. Papiano) and anyone who needs more than the
-  public limit.
-
 ```
+POST /transcribe
+Header: X-API-Key: <key>
 { "audio_base64": "<base64 audio bytes>" }
 
 200 OK
