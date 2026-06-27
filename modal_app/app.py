@@ -24,6 +24,7 @@ image = (
         "torch==2.5.0",
         "torchaudio==2.5.0",
         "numpy",
+        "librosa",
         f"git+https://github.com/EleutherAI/aria-amt.git@{ARIA_AMT_COMMIT}",
         "fastapi[standard]",
     )
@@ -36,6 +37,73 @@ checkpoint_volume = modal.Volume.from_name(
 )
 
 api_key_secret = modal.Secret.from_name("papiano-api-key")
+
+SAMPLE_RATE = 16000
+# Aria-AMT's own note-off prediction is the noisiest part of the model (this
+# is the harder half of "onset+offset F1" in its benchmarks) and it tends to
+# err toward predicting notes longer than they actually sound, especially in
+# pedal-heavy passages where other notes' resonance bleeds into the audio.
+# This refines each predicted offset against the actual per-pitch decay in
+# the source audio, so it only ever shortens a note, never lengthens one.
+MIN_NOTE_DURATION_S = 0.05
+DECAY_THRESHOLD_RATIO = 0.15
+
+
+def _refine_note_offsets(audio_path: str, notes: list) -> list:
+    import librosa
+    import numpy as np
+
+    y, _ = librosa.load(audio_path, sr=SAMPLE_RATE, mono=True)
+    hop_length = 256
+    # bins_per_octave=12 means one CQT bin per semitone, lining up directly
+    # with MIDI pitch numbers (bin 0 == MIDI note 21 == A0).
+    cqt = np.abs(
+        librosa.cqt(
+            y,
+            sr=SAMPLE_RATE,
+            hop_length=hop_length,
+            fmin=librosa.midi_to_hz(21),
+            n_bins=88,
+            bins_per_octave=12,
+        )
+    )
+    frame_times = librosa.frames_to_time(
+        np.arange(cqt.shape[1]), sr=SAMPLE_RATE, hop_length=hop_length
+    )
+
+    refined = []
+    for note in notes:
+        bin_idx = note["pitch"] - 21
+        onset_idx = int(np.searchsorted(frame_times, note["onset"]))
+        offset_idx = int(np.searchsorted(frame_times, note["offset"]))
+        offset_idx = min(offset_idx, cqt.shape[1] - 1)
+
+        if not (0 <= bin_idx < 88) or offset_idx <= onset_idx:
+            refined.append(note)
+            continue
+
+        segment = cqt[bin_idx, onset_idx : offset_idx + 1]
+        peak = segment.max()
+        if peak <= 0:
+            refined.append(note)
+            continue
+
+        threshold = peak * DECAY_THRESHOLD_RATIO
+        peak_idx = int(segment.argmax())
+        decay_idx = next(
+            (i for i in range(peak_idx, len(segment)) if segment[i] < threshold),
+            None,
+        )
+        if decay_idx is None:
+            refined.append(note)
+            continue
+
+        new_offset = float(frame_times[onset_idx + decay_idx])
+        new_offset = max(new_offset, note["onset"] + MIN_NOTE_DURATION_S)
+        new_offset = min(new_offset, note["offset"])
+        refined.append({**note, "offset": round(new_offset, 3)})
+
+    return refined
 
 
 @app.cls(
@@ -169,12 +237,6 @@ class PianoTranscriber:
         )
         midi_dict = tokenizer.detokenize(concat_seq, last_onset)
         midi_dict.remove_redundant_pedals()
-        midi_file = midi_dict.to_midi()
-
-        with tempfile.NamedTemporaryFile(suffix=".mid") as tmp_out:
-            midi_file.save(tmp_out.name)
-            tmp_out.seek(0)
-            midi_bytes = tmp_out.read()
 
         notes = [
             {
@@ -185,6 +247,20 @@ class PianoTranscriber:
             }
             for m in midi_dict.note_msgs
         ]
+
+        with tempfile.NamedTemporaryFile(suffix=".audio") as tmp_refine:
+            tmp_refine.write(audio_bytes)
+            tmp_refine.flush()
+            notes = _refine_note_offsets(tmp_refine.name, notes)
+
+        for note_msg, note in zip(midi_dict.note_msgs, notes):
+            note_msg["data"]["end"] = round(note["offset"] * 1000.0)
+
+        midi_file = midi_dict.to_midi()
+        with tempfile.NamedTemporaryFile(suffix=".mid") as tmp_out:
+            midi_file.save(tmp_out.name)
+            tmp_out.seek(0)
+            midi_bytes = tmp_out.read()
 
         pedals = []
         pedal_on_tick = None
