@@ -1,8 +1,8 @@
 """
-Quick test client for the deployed Modal piano-transcription endpoint.
+Quick test client for the deployed Papiano Transcribe endpoint.
 
 Usage:
-    python scripts/test_endpoint.py --url https://your-workspace--piano-transcription-transcribe.modal.run \
+    python scripts/test_endpoint.py --url https://your-workspace--papiano-transcribe-web.modal.run/transcribe \
         --audio path/to/song.wav --out output.mid
 """
 

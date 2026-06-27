@@ -1,5 +1,5 @@
 """
-Modal app serving piano audio -> MIDI transcription.
+Papiano Transcribe — Modal app serving piano audio -> MIDI transcription.
 
 Model: high-resolution piano transcription (PyTorch checkpoint of
 ByteDance's model, MIT licensed). The checkpoint lives on a Modal
@@ -37,10 +37,10 @@ image = (
     )
 )
 
-app = modal.App("piano-transcription", image=image)
+app = modal.App("papiano-transcribe", image=image)
 
 checkpoint_volume = modal.Volume.from_name(
-    "piano-transcription-checkpoints", create_if_missing=True
+    "papiano-transcribe-checkpoints", create_if_missing=True
 )
 
 SAMPLE_RATE = 16000
@@ -63,8 +63,8 @@ class PianoTranscriber:
         if not os.path.exists(checkpoint_path):
             raise RuntimeError(
                 f"Checkpoint not found at {checkpoint_path}. Run "
-                "`modal run scripts/setup_checkpoint_volume.py --hf-repo "
-                "YOUR_USERNAME/piano_trans` once to seed the volume."
+                "`modal run scripts/setup_checkpoint_volume.py` once to "
+                "seed the volume."
             )
         device = "cuda" if torch.cuda.is_available() else "cpu"
         self.transcriptor = PianoTranscription(

@@ -1,6 +1,7 @@
-# audio-midi
+# Papiano Transcribe
 
-Piano audio → MIDI transcription backend, served on [Modal](https://modal.com).
+Piano audio → MIDI transcription backend for Papiano, served on
+[Modal](https://modal.com).
 
 Model: high-resolution piano transcription
 (PyTorch port of ByteDance's model,
@@ -32,7 +33,7 @@ modal run scripts/setup_checkpoint_volume.py
 ```
 
 This downloads the `.pth` checkpoint once from Zenodo and stores it on a
-Modal Volume named `piano-transcription-checkpoints`. The serving app reads
+Modal Volume named `papiano-transcribe-checkpoints`. The serving app reads
 from this volume directly — no external network access at request time.
 
 Re-run this script whenever you want to push a new/retrained checkpoint
@@ -47,7 +48,7 @@ modal deploy modal_app/app.py
 Modal prints the HTTPS base URL, e.g.:
 
 ```
-https://YOUR_WORKSPACE--piano-transcription-web.modal.run
+https://YOUR_WORKSPACE--papiano-transcribe-web.modal.run
 ```
 
 POST to `<base url>/transcribe`. CORS is wide open, so it can be called
@@ -67,7 +68,7 @@ container scales to zero after ~2 minutes idle (`scaledown_window=120` in
 ```bash
 pip install requests
 python scripts/test_endpoint.py \
-    --url https://YOUR_WORKSPACE--piano-transcription-web.modal.run/transcribe \
+    --url https://YOUR_WORKSPACE--papiano-transcribe-web.modal.run/transcribe \
     --audio path/to/song.wav \
     --out output.mid
 ```
@@ -102,7 +103,7 @@ same note and sustain-pedal (CC64) events.
 
 Run training on Modal with an on-demand GPU function (separate from this
 inference app, or added alongside it), then write the resulting checkpoint
-straight into the `piano-transcription-checkpoints` volume (e.g. from the
+straight into the `papiano-transcribe-checkpoints` volume (e.g. from the
 training function itself, or by adapting `setup_checkpoint_volume.py` to
 copy your new `.pth` file instead of downloading from Zenodo). Redeploy (or
 just let existing containers scale down) and the next cold start picks up

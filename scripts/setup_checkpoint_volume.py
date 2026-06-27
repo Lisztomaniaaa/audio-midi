@@ -22,10 +22,10 @@ ZENODO_URL = (
 
 image = modal.Image.debian_slim(python_version="3.11").pip_install("requests")
 
-app = modal.App("piano-transcription-setup", image=image)
+app = modal.App("papiano-transcribe-setup", image=image)
 
 checkpoint_volume = modal.Volume.from_name(
-    "piano-transcription-checkpoints", create_if_missing=True
+    "papiano-transcribe-checkpoints", create_if_missing=True
 )
 
 
@@ -43,7 +43,7 @@ def seed_checkpoint() -> str:
                 f.write(chunk)
 
     checkpoint_volume.commit()
-    print(f"Checkpoint stored at {dest_path} on volume 'piano-transcription-checkpoints'.")
+    print(f"Checkpoint stored at {dest_path} on volume 'papiano-transcribe-checkpoints'.")
     return dest_path
 
 
