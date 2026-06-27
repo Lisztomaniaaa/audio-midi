@@ -2,11 +2,11 @@
 
 Piano audio → MIDI transcription backend, served on [Modal](https://modal.com).
 
-Model: a personal Hugging Face duplicate of
-[`Genius-Society/piano_trans`](https://huggingface.co/Genius-Society/piano_trans)
-(PyTorch port of ByteDance's high-resolution piano transcription model,
-[arXiv:2010.01815](https://arxiv.org/abs/2010.01815), MIT licensed), loaded
-via `timm.create_model("hf_hub:<your-repo>", pretrained=True)`. Postprocessing
+Model: high-resolution piano transcription
+(PyTorch port of ByteDance's model,
+[arXiv:2010.01815](https://arxiv.org/abs/2010.01815), MIT licensed). The
+checkpoint is stored on a **Modal Volume** and loaded straight from disk at
+serving time — the deployed app never talks to Hugging Face. Postprocessing
 (regression outputs → discrete onset/offset/velocity/pedal events and MIDI
 file generation) reuses the original author's MIT-licensed
 [`piano_transcription_inference`](https://github.com/qiuqiangkong/piano_transcription_inference)
@@ -15,45 +15,50 @@ package.
 ## Repo layout
 
 ```
-modal_app/app.py        Modal app: loads the model, exposes an HTTP endpoint
-scripts/duplicate_model.py  One-off: forks Genius-Society/piano_trans to your HF account
-scripts/test_endpoint.py    Calls a deployed endpoint with a local audio file
-requirements.txt        Reference deps (for local dev; Modal app pins its own image)
+modal_app/app.py                     Modal app: loads the model from a Volume, exposes an HTTP endpoint
+scripts/setup_checkpoint_volume.py   One-off: downloads the checkpoint and seeds the Modal Volume
+scripts/duplicate_model.py           Optional: forks Genius-Society/piano_trans to your own HF account (for retraining/provenance)
+scripts/test_endpoint.py             Calls a deployed endpoint with a local audio file
+requirements.txt                     Reference deps (for local dev; Modal apps pin their own images)
 ```
 
-## 1. Duplicate the model to your HF account
+## 1. (Optional) Duplicate the model to your own HF account
+
+Only needed if you plan to retrain/fine-tune and want your own copy as the
+base checkpoint. Skip straight to step 2 if you just want to serve the
+original model.
 
 ```bash
 pip install huggingface_hub
-huggingface-cli login   # or export HF_TOKEN=...
+hf auth login   # or export HF_TOKEN=...
 python scripts/duplicate_model.py --target-repo YOUR_USERNAME/piano_trans
 ```
 
 This snapshots `Genius-Society/piano_trans`, uploads it to
 `YOUR_USERNAME/piano_trans`, and appends a provenance/attribution section to
 the README crediting the original model and ByteDance paper. The MIT
-`LICENSE` file is copied as-is. This new repo is the base for any future
-retraining — push new checkpoints here.
+`LICENSE` file is copied as-is.
 
-## 2. Configure the Modal app
-
-Edit `HF_MODEL_REPO` in `modal_app/app.py` (or set it via env var at deploy
-time) to point at your duplicated repo, e.g. `YOUR_USERNAME/piano_trans`.
-
-If your HF repo is private, create a Modal secret with your HF token:
-
-```bash
-modal secret create huggingface-secret HF_TOKEN=hf_xxx
-```
-
-and reference it in `app.py`'s `@app.cls(...)` decorator with
-`secrets=[modal.Secret.from_name("huggingface-secret")]`.
-
-## 3. Deploy
+## 2. Seed the checkpoint volume
 
 ```bash
 pip install modal
 modal setup            # one-time auth
+modal run scripts/setup_checkpoint_volume.py --hf-repo Genius-Society/piano_trans
+# or, if you duplicated it in step 1:
+modal run scripts/setup_checkpoint_volume.py --hf-repo YOUR_USERNAME/piano_trans
+```
+
+This downloads the `.pth` checkpoint once and stores it on a Modal Volume
+named `piano-transcription-checkpoints`. The serving app reads from this
+volume directly — no Hugging Face access at request time, and no repo bloat
+(MuseScore AppImage, example MP3s, etc.) ever touches the serving image.
+
+Re-run this script whenever you push a new/retrained checkpoint.
+
+## 3. Deploy
+
+```bash
 modal deploy modal_app/app.py
 ```
 
@@ -106,12 +111,15 @@ same note and sustain-pedal (CC64) events.
 ## Retraining later
 
 Run training on Modal with an on-demand GPU function (separate from this
-inference app, or added alongside it), and push resulting checkpoints back to
-your `YOUR_USERNAME/piano_trans` HF repo with `huggingface_hub.HfApi.upload_file`
-or `upload_folder` — the same mechanism `scripts/duplicate_model.py` uses for
-the initial fork. The inference app in `modal_app/app.py` will pick up new
-weights automatically on next cold start (it always loads `pretrained=True`
-from the HF repo).
+inference app, or added alongside it). Once you have a new checkpoint:
+
+1. (Optional) Push it to your HF repo for backup/provenance via
+   `huggingface_hub.HfApi.upload_file`.
+2. Run `modal run scripts/setup_checkpoint_volume.py --hf-repo
+   YOUR_USERNAME/piano_trans` again to refresh the volume — or write the new
+   `.pth` file straight into the volume from your training function.
+3. Redeploy (or just let existing containers scale down; the next cold
+   start picks up the new file on the volume).
 
 ## Using from another project (e.g. a piano visualizer)
 
