@@ -58,9 +58,6 @@ class PianoTranscriber:
         self.transcriptor = PianoTranscription(
             checkpoint_path=checkpoint_path, device=device
         )
-        # Library defaults (frame_threshold=0.1, offset_threshod=0.3) make
-        # notes ring on far longer than they actually sound. Raising these
-        # makes the offset detector cut notes off sooner; tune if needed.
         self.transcriptor.frame_threshold = 0.3
         self.transcriptor.offset_threshod = 0.5
 
