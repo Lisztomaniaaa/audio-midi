@@ -5,9 +5,6 @@ Deploy: modal deploy modal_app/app.py
 """
 
 import base64
-import secrets
-import time
-import uuid
 
 import modal
 
@@ -34,10 +31,7 @@ checkpoint_volume = modal.Volume.from_name(
     "papiano-transcribe-checkpoints", create_if_missing=True
 )
 
-admin_password_secret = modal.Secret.from_name("papiano-admin-password")
-
-api_keys = modal.Dict.from_name("papiano-api-keys", create_if_missing=True)
-key_requests = modal.Dict.from_name("papiano-key-requests", create_if_missing=True)
+api_key_secret = modal.Secret.from_name("papiano-api-key")
 
 SAMPLE_RATE = 16000
 
@@ -111,7 +105,7 @@ class PianoTranscriber:
         }
 
 
-@app.function(secrets=[admin_password_secret])
+@app.function(secrets=[api_key_secret])
 @modal.asgi_app()
 def web():
     import os
@@ -127,101 +121,12 @@ def web():
         allow_headers=["*"],
     )
 
-    def require_admin(x_admin_password: str):
-        if x_admin_password != os.environ["ADMIN_PASSWORD"]:
-            raise HTTPException(status_code=401, detail="Invalid admin password")
-
     @web_app.post("/transcribe")
     def transcribe(item: dict, x_api_key: str = Header(default="")):
-        record = api_keys.get(x_api_key)
-        if record is None or record.get("revoked"):
+        if x_api_key != os.environ["API_KEY"]:
             raise HTTPException(status_code=401, detail="Invalid API key")
         audio_b64 = item["audio_base64"]
         transcriber = PianoTranscriber()
         return transcriber.transcribe.remote(audio_b64)
-
-    @web_app.post("/request-access")
-    def request_access(item: dict):
-        name = item.get("name", "").strip()
-        email = item.get("email", "").strip()
-        reason = item.get("reason", "").strip()
-        if not name or not email:
-            raise HTTPException(status_code=400, detail="name and email required")
-        request_id = str(uuid.uuid4())
-        key_requests[request_id] = {
-            "name": name,
-            "email": email,
-            "reason": reason,
-            "status": "pending",
-            "created_at": time.time(),
-        }
-        return {"request_id": request_id}
-
-    @web_app.get("/admin/requests")
-    def list_requests(x_admin_password: str = Header(default="")):
-        require_admin(x_admin_password)
-        return [
-            {"request_id": rid, **data}
-            for rid, data in key_requests.items()
-            if data.get("status") == "pending"
-        ]
-
-    @web_app.post("/admin/requests/{request_id}/approve")
-    def approve_request(request_id: str, x_admin_password: str = Header(default="")):
-        require_admin(x_admin_password)
-        record = key_requests.get(request_id)
-        if record is None:
-            raise HTTPException(status_code=404, detail="Request not found")
-        new_key = secrets.token_urlsafe(32)
-        api_keys[new_key] = {
-            "label": record["name"],
-            "email": record["email"],
-            "revoked": False,
-            "created_at": time.time(),
-        }
-        record["status"] = "approved"
-        key_requests[request_id] = record
-        return {"api_key": new_key}
-
-    @web_app.post("/admin/requests/{request_id}/reject")
-    def reject_request(request_id: str, x_admin_password: str = Header(default="")):
-        require_admin(x_admin_password)
-        record = key_requests.get(request_id)
-        if record is None:
-            raise HTTPException(status_code=404, detail="Request not found")
-        record["status"] = "rejected"
-        key_requests[request_id] = record
-        return {"status": "rejected"}
-
-    @web_app.post("/admin/keys")
-    def create_key(item: dict, x_admin_password: str = Header(default="")):
-        require_admin(x_admin_password)
-        label = item.get("label", "").strip() or "unlabeled"
-        new_key = secrets.token_urlsafe(32)
-        api_keys[new_key] = {
-            "label": label,
-            "email": item.get("email", ""),
-            "revoked": False,
-            "created_at": time.time(),
-        }
-        return {"api_key": new_key}
-
-    @web_app.get("/admin/keys")
-    def list_keys(x_admin_password: str = Header(default="")):
-        require_admin(x_admin_password)
-        return [
-            {"api_key": key, **data}
-            for key, data in api_keys.items()
-        ]
-
-    @web_app.post("/admin/keys/{api_key}/revoke")
-    def revoke_key(api_key: str, x_admin_password: str = Header(default="")):
-        require_admin(x_admin_password)
-        record = api_keys.get(api_key)
-        if record is None:
-            raise HTTPException(status_code=404, detail="Key not found")
-        record["revoked"] = True
-        api_keys[api_key] = record
-        return {"status": "revoked"}
 
     return web_app

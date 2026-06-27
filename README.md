@@ -12,8 +12,6 @@ modal_app/app.py                     Serving app (GPU class + HTTP endpoint)
 scripts/setup_checkpoint_volume.py   Seeds the checkpoint volume
 scripts/test_endpoint.py             CLI test client
 web/index.html                       Browser test client (keyed)
-web/admin.html                       Admin: generate/revoke keys, approve requests
-web/request-access.html              Form to request a keyed API account
 requirements.txt                     Reference deps for local dev
 ```
 
@@ -22,7 +20,7 @@ requirements.txt                     Reference deps for local dev
 ```bash
 modal setup
 modal run scripts/setup_checkpoint_volume.py
-modal secret create papiano-admin-password ADMIN_PASSWORD="<your-password>"
+modal secret create papiano-api-key API_KEY="<shared-secret>"
 modal deploy modal_app/app.py
 ```
 
@@ -33,7 +31,7 @@ CORS is open (`*`).
 
 ```
 POST /transcribe
-Header: X-API-Key: <key>
+Header: X-API-Key: <shared secret>
 { "audio_base64": "<base64 audio bytes>" }
 
 200 OK
@@ -47,24 +45,9 @@ Header: X-API-Key: <key>
 `pitch`: MIDI note number. `onset`/`offset`: seconds. `midi_base64`: standard
 MIDI file with the same notes + sustain pedal (CC64).
 
-API keys are stored server-side in a Modal Dict, never in this repo or in
-any frontend. Issue/revoke them from `web/admin.html`.
-
-```
-POST /request-access            { name, email, reason } -> request_id, pending review
-GET  /admin/requests            X-Admin-Password header -> pending requests
-POST /admin/requests/{id}/approve   -> { api_key }
-POST /admin/requests/{id}/reject
-POST /admin/keys                { label } -> { api_key }
-GET  /admin/keys                -> all keys + status
-POST /admin/keys/{key}/revoke
-```
-
-`web/admin.html`: connect with base URL + admin password, generate/revoke
-keys, approve/reject pending requests.
-
-`web/request-access.html`: public form for requesting a key; submissions
-sit in `/admin/requests` until approved.
+One shared API key, set as a Modal Secret. The Papiano backend holds the
+same key and calls this endpoint server-to-server; per-user access, auth,
+and limits are Papiano's responsibility, not this service's.
 
 ## Testing
 
