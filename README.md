@@ -3,7 +3,7 @@
 Piano audio → MIDI transcription service for Papiano. Modal-hosted, T4 GPU,
 scale-to-zero.
 
-Checkpoint cached on a Modal Volume, seeded from Zenodo.
+Checkpoint cached on a Modal Volume, seeded once via `scripts/setup_checkpoint_volume.py`.
 
 ## Layout
 

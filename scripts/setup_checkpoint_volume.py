@@ -1,15 +1,15 @@
-"""One-time: download the checkpoint from Zenodo into the Modal Volume.
+"""One-time: download the Aria-AMT checkpoint into the Modal Volume.
 
 Usage: modal run scripts/setup_checkpoint_volume.py
 """
 
 import modal
 
-CHECKPOINT_FILENAME = "CRNN_note_F1=0.9677_pedal_F1=0.9186.pth"
+CHECKPOINT_FILENAME = "piano-medium-double-1.0.safetensors"
 CHECKPOINT_DIR = "/checkpoints"
-ZENODO_URL = (
-    "https://zenodo.org/record/4034264/files/"
-    "CRNN_note_F1%3D0.9677_pedal_F1%3D0.9186.pth?download=1"
+CHECKPOINT_URL = (
+    "https://huggingface.co/datasets/loubb/aria-midi/resolve/main/"
+    "piano-medium-double-1.0.safetensors?download=true"
 )
 
 image = modal.Image.debian_slim(python_version="3.11").pip_install("requests")
@@ -26,9 +26,9 @@ def seed_checkpoint() -> str:
     import requests
 
     dest_path = f"{CHECKPOINT_DIR}/{CHECKPOINT_FILENAME}"
-    print(f"Downloading checkpoint from {ZENODO_URL} ...")
+    print(f"Downloading checkpoint from {CHECKPOINT_URL} ...")
 
-    with requests.get(ZENODO_URL, stream=True, timeout=300) as response:
+    with requests.get(CHECKPOINT_URL, stream=True, timeout=300) as response:
         response.raise_for_status()
         with open(dest_path, "wb") as f:
             for chunk in response.iter_content(chunk_size=8 * 1024 * 1024):
