@@ -31,6 +31,8 @@ checkpoint_volume = modal.Volume.from_name(
     "papiano-transcribe-checkpoints", create_if_missing=True
 )
 
+api_key_secret = modal.Secret.from_name("papiano-api-key")
+
 SAMPLE_RATE = 16000
 
 
@@ -103,10 +105,12 @@ class PianoTranscriber:
         }
 
 
-@app.function()
+@app.function(secrets=[api_key_secret])
 @modal.asgi_app()
 def web():
-    from fastapi import FastAPI
+    import os
+
+    from fastapi import FastAPI, Header, HTTPException
     from fastapi.middleware.cors import CORSMiddleware
 
     web_app = FastAPI()
@@ -118,7 +122,9 @@ def web():
     )
 
     @web_app.post("/transcribe")
-    def transcribe(item: dict):
+    def transcribe(item: dict, x_api_key: str = Header(default="")):
+        if x_api_key != os.environ["API_KEY"]:
+            raise HTTPException(status_code=401, detail="Invalid API key")
         audio_b64 = item["audio_base64"]
         transcriber = PianoTranscriber()
         return transcriber.transcribe.remote(audio_b64)
