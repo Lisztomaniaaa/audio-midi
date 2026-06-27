@@ -1,14 +1,6 @@
-"""
-One-time setup: download the piano transcription checkpoint and store it on
-a Modal Volume, so the serving app (modal_app/app.py) never needs to talk to
-any external host at request time.
+"""One-time: download the checkpoint from Zenodo into the Modal Volume.
 
-Usage:
-    modal run scripts/setup_checkpoint_volume.py
-
-Downloads the checkpoint from Zenodo (the original author's release,
-record 4034264 - https://zenodo.org/record/4034264) straight into the
-volume and exits. No Hugging Face involved.
+Usage: modal run scripts/setup_checkpoint_volume.py
 """
 
 import modal

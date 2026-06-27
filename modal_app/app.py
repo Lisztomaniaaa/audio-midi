@@ -1,19 +1,7 @@
-"""
-Papiano Transcribe — Modal app serving piano audio -> MIDI transcription.
+"""Papiano Transcribe — piano audio -> MIDI, served on Modal.
 
-Model: high-resolution piano transcription (PyTorch checkpoint of
-ByteDance's model, MIT licensed). The checkpoint lives on a Modal
-Volume (no Hugging Face access at serving time) and is loaded through
-the original author's `piano_transcription_inference` package (MIT,
-same upstream method/architecture), which also handles segmenting, the
-CRNN forward pass, regression postprocessing into note/pedal events,
-and MIDI file writing.
-
-Before first deploy, seed the volume with the checkpoint once:
-    modal run scripts/setup_checkpoint_volume.py
-
-Deploy:
-    modal deploy modal_app/app.py
+First-time setup: modal run scripts/setup_checkpoint_volume.py
+Deploy: modal deploy modal_app/app.py
 """
 
 import base64
@@ -78,15 +66,6 @@ class PianoTranscriber:
 
     @modal.method()
     def transcribe(self, audio_b64: str) -> dict:
-        """
-        audio_b64: base64-encoded audio file bytes (any format ffmpeg/librosa
-        can decode: wav, mp3, flac, etc).
-
-        Returns a dict with:
-          - notes: list of {pitch, onset, offset, velocity}
-          - pedals: list of {onset, offset}
-          - midi_base64: base64-encoded MIDI file bytes
-        """
         import tempfile
 
         import librosa
@@ -130,13 +109,6 @@ class PianoTranscriber:
 @app.function()
 @modal.asgi_app()
 def web():
-    """
-    HTTP API. POST /transcribe with JSON: {"audio_base64": "<base64 audio bytes>"}
-    Returns JSON: {"notes": [...], "pedals": [...], "midi_base64": "..."}
-
-    CORS is wide open (allow_origins=["*"]) so this can be called directly
-    from browser JS (the test page in web/index.html, or from Papiano).
-    """
     from fastapi import FastAPI
     from fastapi.middleware.cors import CORSMiddleware
 
