@@ -22,7 +22,7 @@ import os
 
 import modal
 
-HF_MODEL_REPO = os.environ.get("HF_MODEL_REPO", "your-username/piano_trans")
+HF_MODEL_REPO = os.environ.get("HF_MODEL_REPO", "Lisztomaniaaa/piano_trans")
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
