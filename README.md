@@ -11,7 +11,6 @@ Checkpoint cached on a Modal Volume, seeded from Zenodo.
 modal_app/app.py                     Serving app (GPU class + HTTP endpoint)
 scripts/setup_checkpoint_volume.py   Seeds the checkpoint volume
 scripts/test_endpoint.py             CLI test client
-web/index.html                       Browser test client (keyed)
 requirements.txt                     Reference deps for local dev
 ```
 
@@ -54,8 +53,6 @@ and limits are Papiano's responsibility, not this service's.
 ```bash
 python scripts/test_endpoint.py --url <base url>/transcribe --audio song.wav --out output.mid --key <api-key>
 ```
-
-Or open `web/index.html` in a browser (enter the API key in the form).
 
 ## Retraining
 
