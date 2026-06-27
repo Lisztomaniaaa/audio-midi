@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8" />
+<title>Papiano Transcribe — Request Access</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 480px; margin: 40px auto; padding: 0 16px; }
+  h1 { font-size: 1.3rem; }
+  input, textarea, button { font-size: 1rem; padding: 8px; margin: 8px 0; width: 100%; box-sizing: border-box; }
+  button { cursor: pointer; width: auto; }
+  #status { margin: 12px 0; font-weight: bold; }
+</style>
+</head>
+<body>
+  <h1>Request API Access</h1>
+
+  <input id="baseUrl" type="text" placeholder="Base URL (.../web.modal.run)" />
+  <input id="name" type="text" placeholder="Name" />
+  <input id="email" type="email" placeholder="Email" />
+  <textarea id="reason" rows="3" placeholder="Reason (optional)"></textarea>
+  <button id="submit">Submit request</button>
+
+  <div id="status"></div>
+
+  <script>
+    document.getElementById("submit").addEventListener("click", async () => {
+      const baseUrl = document.getElementById("baseUrl").value.trim().replace(/\/$/, "");
+      const name = document.getElementById("name").value.trim();
+      const email = document.getElementById("email").value.trim();
+      const reason = document.getElementById("reason").value.trim();
+      const statusEl = document.getElementById("status");
+
+      if (!baseUrl || !name || !email) {
+        statusEl.textContent = "Isi base URL, name, dan email.";
+        return;
+      }
+
+      try {
+        const res = await fetch(`${baseUrl}/request-access`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, email, reason }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        statusEl.textContent = "Request submitted. Tunggu approval.";
+      } catch (err) {
+        statusEl.textContent = "Error: " + err.message;
+      }
+    });
+  </script>
+</body>
+</html>

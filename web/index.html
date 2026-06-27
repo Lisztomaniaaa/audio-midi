@@ -22,6 +22,10 @@
     value="https://utamairfan44--papiano-transcribe-web.modal.run/transcribe" />
 
   <br/>
+  <label for="apiKey">API Key:</label><br/>
+  <input id="apiKey" type="text" size="60" />
+
+  <br/>
   <label for="file">File audio (wav/mp3/dll):</label><br/>
   <input id="file" type="file" accept="audio/*" />
 
@@ -57,11 +61,12 @@
 
     sendBtn.addEventListener("click", async () => {
       const url = document.getElementById("url").value.trim();
+      const apiKey = document.getElementById("apiKey").value.trim();
       const fileInput = document.getElementById("file");
       const file = fileInput.files[0];
 
-      if (!url || !file) {
-        statusEl.textContent = "Isi URL endpoint dan pilih file audio dulu.";
+      if (!url || !apiKey || !file) {
+        statusEl.textContent = "Isi URL endpoint, API key, dan pilih file audio dulu.";
         return;
       }
 
@@ -74,7 +79,7 @@
         const audioB64 = await toBase64(file);
         const res = await fetch(url, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
           body: JSON.stringify({ audio_base64: audioB64 }),
         });
 

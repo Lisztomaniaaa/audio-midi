@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8" />
+<title>Papiano Transcribe — Admin</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; }
+  h1 { font-size: 1.3rem; }
+  h2 { font-size: 1.05rem; margin-top: 32px; }
+  input, button { font-size: 1rem; padding: 8px; margin: 4px 0; }
+  button { cursor: pointer; }
+  table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+  th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; font-size: 0.85rem; word-break: break-all; }
+  #status { margin: 12px 0; font-weight: bold; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+  <h1>Papiano Transcribe — Admin</h1>
+
+  <div class="row">
+    <input id="baseUrl" type="text" size="50" placeholder="Base URL (.../web.modal.run)" />
+    <input id="adminPassword" type="password" placeholder="Admin password" />
+    <button id="connect">Connect</button>
+  </div>
+  <div id="status"></div>
+
+  <div id="panel" style="display:none">
+    <h2>Generate key</h2>
+    <div class="row">
+      <input id="newKeyLabel" type="text" placeholder="Label (e.g. papiano-frontend)" />
+      <button id="generateKey">Generate</button>
+    </div>
+
+    <h2>Pending requests</h2>
+    <table id="requestsTable">
+      <thead><tr><th>Name</th><th>Email</th><th>Reason</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+
+    <h2>Active keys</h2>
+    <table id="keysTable">
+      <thead><tr><th>Key</th><th>Label</th><th>Email</th><th>Status</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <script>
+    let baseUrl = "";
+    let adminPassword = "";
+
+    function authHeaders() {
+      return { "X-Admin-Password": adminPassword };
+    }
+
+    async function refresh() {
+      const [requestsRes, keysRes] = await Promise.all([
+        fetch(`${baseUrl}/admin/requests`, { headers: authHeaders() }),
+        fetch(`${baseUrl}/admin/keys`, { headers: authHeaders() }),
+      ]);
+      if (!requestsRes.ok || !keysRes.ok) throw new Error("Auth failed or request error");
+
+      const requests = await requestsRes.json();
+      const reqBody = document.querySelector("#requestsTable tbody");
+      reqBody.innerHTML = "";
+      requests.forEach((r) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${r.name}</td><td>${r.email}</td><td>${r.reason || ""}</td><td></td>`;
+        const td = tr.querySelector("td:last-child");
+        const approveBtn = document.createElement("button");
+        approveBtn.textContent = "Approve";
+        approveBtn.onclick = () => approveRequest(r.request_id);
+        const rejectBtn = document.createElement("button");
+        rejectBtn.textContent = "Reject";
+        rejectBtn.onclick = () => rejectRequest(r.request_id);
+        td.appendChild(approveBtn);
+        td.appendChild(rejectBtn);
+        reqBody.appendChild(tr);
+      });
+
+      const keys = await keysRes.json();
+      const keysBody = document.querySelector("#keysTable tbody");
+      keysBody.innerHTML = "";
+      keys.forEach((k) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${k.api_key}</td><td>${k.label}</td><td>${k.email || ""}</td><td>${k.revoked ? "revoked" : "active"}</td><td></td>`;
+        if (!k.revoked) {
+          const td = tr.querySelector("td:last-child");
+          const revokeBtn = document.createElement("button");
+          revokeBtn.textContent = "Revoke";
+          revokeBtn.onclick = () => revokeKey(k.api_key);
+          td.appendChild(revokeBtn);
+        }
+        keysBody.appendChild(tr);
+      });
+    }
+
+    async function approveRequest(id) {
+      const res = await fetch(`${baseUrl}/admin/requests/${id}/approve`, { method: "POST", headers: authHeaders() });
+      const data = await res.json();
+      alert(`New key: ${data.api_key}`);
+      refresh();
+    }
+
+    async function rejectRequest(id) {
+      await fetch(`${baseUrl}/admin/requests/${id}/reject`, { method: "POST", headers: authHeaders() });
+      refresh();
+    }
+
+    async function revokeKey(key) {
+      await fetch(`${baseUrl}/admin/keys/${key}/revoke`, { method: "POST", headers: authHeaders() });
+      refresh();
+    }
+
+    document.getElementById("generateKey").addEventListener("click", async () => {
+      const label = document.getElementById("newKeyLabel").value.trim();
+      const res = await fetch(`${baseUrl}/admin/keys`, {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ label }),
+      });
+      const data = await res.json();
+      alert(`New key: ${data.api_key}`);
+      document.getElementById("newKeyLabel").value = "";
+      refresh();
+    });
+
+    document.getElementById("connect").addEventListener("click", async () => {
+      baseUrl = document.getElementById("baseUrl").value.trim().replace(/\/$/, "");
+      adminPassword = document.getElementById("adminPassword").value;
+      const statusEl = document.getElementById("status");
+      try {
+        await refresh();
+        statusEl.textContent = "Connected.";
+        document.getElementById("panel").style.display = "block";
+      } catch (err) {
+        statusEl.textContent = "Error: " + err.message;
+        document.getElementById("panel").style.display = "none";
+      }
+    });
+  </script>
+</body>
+</html>

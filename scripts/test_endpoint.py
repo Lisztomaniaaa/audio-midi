@@ -18,12 +18,18 @@ def main() -> None:
     parser.add_argument("--url", required=True, help="Modal endpoint URL")
     parser.add_argument("--audio", required=True, help="Path to input audio file")
     parser.add_argument("--out", default="output.mid", help="Path to write output MIDI")
+    parser.add_argument("--key", required=True, help="API key")
     args = parser.parse_args()
 
     with open(args.audio, "rb") as f:
         audio_b64 = base64.b64encode(f.read()).decode("utf-8")
 
-    response = requests.post(args.url, json={"audio_base64": audio_b64}, timeout=300)
+    response = requests.post(
+        args.url,
+        json={"audio_base64": audio_b64},
+        headers={"X-API-Key": args.key},
+        timeout=300,
+    )
     response.raise_for_status()
     result = response.json()
 
