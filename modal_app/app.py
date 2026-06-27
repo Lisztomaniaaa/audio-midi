@@ -36,6 +36,7 @@ image = (
         "mido",
         "piano_transcription_inference",
         "numpy",
+        "fastapi[standard]",
     )
 )
 
