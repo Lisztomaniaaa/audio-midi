@@ -3,9 +3,7 @@
 Piano audio → MIDI transcription service for Papiano. Modal-hosted, T4 GPU,
 scale-to-zero.
 
-Model: [`piano_transcription_inference`](https://github.com/qiuqiangkong/piano_transcription_inference)
-(Kong et al., arXiv:2010.01815, MIT). Checkpoint sourced from
-[Zenodo](https://zenodo.org/record/4034264), cached on a Modal Volume.
+Checkpoint cached on a Modal Volume, seeded from Zenodo.
 
 ## Layout
 
@@ -57,9 +55,3 @@ Or open `web/index.html` in a browser.
 
 Write the new checkpoint into the `papiano-transcribe-checkpoints` volume and
 redeploy.
-
-## License
-
-Model architecture, training, and checkpoint: Q. Kong, B. Li, X. Song, Y.
-Wan, Y. Wang, "High-Resolution Piano Transcription with Pedals by Regressing
-Onset and Offset Times," arXiv:2010.01815. MIT License.
