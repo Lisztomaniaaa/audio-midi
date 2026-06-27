@@ -1,22 +1,26 @@
 """
 One-time setup: download the piano transcription checkpoint and store it on
 a Modal Volume, so the serving app (modal_app/app.py) never needs to talk to
-Hugging Face at request time.
+any external host at request time.
 
 Usage:
-    modal run scripts/setup_checkpoint_volume.py --hf-repo YOUR_USERNAME/piano_trans
+    modal run scripts/setup_checkpoint_volume.py
 
-This runs on Modal (not locally), downloads the .pth file from the given HF
-repo straight into the volume, and exits. Re-run it whenever you push a new
-checkpoint to retrain/update the model.
+Downloads the checkpoint from Zenodo (the original author's release,
+record 4034264 - https://zenodo.org/record/4034264) straight into the
+volume and exits. No Hugging Face involved.
 """
 
 import modal
 
 CHECKPOINT_FILENAME = "CRNN_note_F1=0.9677_pedal_F1=0.9186.pth"
 CHECKPOINT_DIR = "/checkpoints"
+ZENODO_URL = (
+    "https://zenodo.org/record/4034264/files/"
+    "CRNN_note_F1%3D0.9677_pedal_F1%3D0.9186.pth?download=1"
+)
 
-image = modal.Image.debian_slim(python_version="3.11").pip_install("huggingface_hub")
+image = modal.Image.debian_slim(python_version="3.11").pip_install("requests")
 
 app = modal.App("piano-transcription-setup", image=image)
 
@@ -25,24 +29,25 @@ checkpoint_volume = modal.Volume.from_name(
 )
 
 
-@app.function(volumes={CHECKPOINT_DIR: checkpoint_volume})
-def seed_checkpoint(hf_repo: str) -> str:
-    import shutil
-
-    from huggingface_hub import hf_hub_download
-
-    print(f"Downloading {CHECKPOINT_FILENAME} from {hf_repo} ...")
-    downloaded_path = hf_hub_download(repo_id=hf_repo, filename=CHECKPOINT_FILENAME)
+@app.function(volumes={CHECKPOINT_DIR: checkpoint_volume}, timeout=600)
+def seed_checkpoint() -> str:
+    import requests
 
     dest_path = f"{CHECKPOINT_DIR}/{CHECKPOINT_FILENAME}"
-    shutil.copyfile(downloaded_path, dest_path)
-    checkpoint_volume.commit()
+    print(f"Downloading checkpoint from {ZENODO_URL} ...")
 
+    with requests.get(ZENODO_URL, stream=True, timeout=300) as response:
+        response.raise_for_status()
+        with open(dest_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8 * 1024 * 1024):
+                f.write(chunk)
+
+    checkpoint_volume.commit()
     print(f"Checkpoint stored at {dest_path} on volume 'piano-transcription-checkpoints'.")
     return dest_path
 
 
 @app.local_entrypoint()
-def main(hf_repo: str):
-    result = seed_checkpoint.remote(hf_repo)
+def main():
+    result = seed_checkpoint.remote()
     print(f"Done: {result}")
