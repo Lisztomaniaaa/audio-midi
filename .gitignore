@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+*.mid
+output.mid
+response.json
+.env
