@@ -44,22 +44,30 @@ Re-run this script whenever you want to push a new/retrained checkpoint
 modal deploy modal_app/app.py
 ```
 
-Modal prints the HTTPS endpoint URL for `transcribe`, e.g.:
+Modal prints the HTTPS base URL, e.g.:
 
 ```
-https://YOUR_WORKSPACE--piano-transcription-transcribe.modal.run
+https://YOUR_WORKSPACE--piano-transcription-web.modal.run
 ```
+
+POST to `<base url>/transcribe`. CORS is wide open, so it can be called
+directly from browser JS (see `web/index.html`).
 
 The model loads onto a T4 GPU on first request (cold start) and the
 container scales to zero after ~2 minutes idle (`scaledown_window=120` in
 `app.py`), so there's no cost while unused.
 
-## 3. Test with a local audio file
+## 3. Test
+
+**Browser:** open `web/index.html` directly in a browser, paste your
+`<base url>/transcribe` URL, pick an audio file, and click "Transkripsi".
+
+**CLI:**
 
 ```bash
 pip install requests
 python scripts/test_endpoint.py \
-    --url https://YOUR_WORKSPACE--piano-transcription-transcribe.modal.run \
+    --url https://YOUR_WORKSPACE--piano-transcription-web.modal.run/transcribe \
     --audio path/to/song.wav \
     --out output.mid
 ```
@@ -68,7 +76,7 @@ Or with curl:
 
 ```bash
 AUDIO_B64=$(base64 -w0 song.wav)
-curl -X POST "$URL" -H "Content-Type: application/json" \
+curl -X POST "$URL/transcribe" -H "Content-Type: application/json" \
     -d "{\"audio_base64\": \"$AUDIO_B64\"}" -o response.json
 ```
 
