@@ -38,8 +38,10 @@ admin_password_secret = modal.Secret.from_name("papiano-admin-password")
 
 api_keys = modal.Dict.from_name("papiano-api-keys", create_if_missing=True)
 key_requests = modal.Dict.from_name("papiano-key-requests", create_if_missing=True)
+public_rate_limits = modal.Dict.from_name("papiano-public-rate-limits", create_if_missing=True)
 
 SAMPLE_RATE = 16000
+PUBLIC_DAILY_LIMIT = 5
 
 
 @app.cls(
@@ -116,7 +118,7 @@ class PianoTranscriber:
 def web():
     import os
 
-    from fastapi import FastAPI, Header, HTTPException
+    from fastapi import FastAPI, Header, HTTPException, Request
     from fastapi.middleware.cors import CORSMiddleware
 
     web_app = FastAPI()
@@ -130,6 +132,33 @@ def web():
     def require_admin(x_admin_password: str):
         if x_admin_password != os.environ["ADMIN_PASSWORD"]:
             raise HTTPException(status_code=401, detail="Invalid admin password")
+
+    def client_ip(request: Request) -> str:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        return request.client.host
+
+    @web_app.post("/convert-public")
+    def convert_public(item: dict, request: Request):
+        import datetime
+
+        ip = client_ip(request)
+        today = datetime.date.today().isoformat()
+        rate_key = f"{ip}:{today}"
+        count = public_rate_limits.get(rate_key, 0)
+        if count >= PUBLIC_DAILY_LIMIT:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Daily limit of {PUBLIC_DAILY_LIMIT} conversions reached. "
+                    "For higher volume or programmatic access, use Papiano."
+                ),
+            )
+        public_rate_limits[rate_key] = count + 1
+        audio_b64 = item["audio_base64"]
+        transcriber = PianoTranscriber()
+        return transcriber.transcribe.remote(audio_b64)
 
     @web_app.post("/transcribe")
     def transcribe(item: dict, x_api_key: str = Header(default="")):
