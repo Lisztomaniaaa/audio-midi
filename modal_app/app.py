@@ -10,7 +10,7 @@ CRNN forward pass, regression postprocessing into note/pedal events,
 and MIDI file writing.
 
 Before first deploy, seed the volume with the checkpoint once:
-    modal run scripts/setup_checkpoint_volume.py --hf-repo YOUR_USERNAME/piano_trans
+    modal run scripts/setup_checkpoint_volume.py
 
 Deploy:
     modal deploy modal_app/app.py
@@ -123,12 +123,30 @@ class PianoTranscriber:
 
 
 @app.function()
-@modal.fastapi_endpoint(method="POST")
-def transcribe(item: dict):
+@modal.asgi_app()
+def web():
     """
-    HTTP endpoint. POST JSON: {"audio_base64": "<base64 audio bytes>"}
+    HTTP API. POST /transcribe with JSON: {"audio_base64": "<base64 audio bytes>"}
     Returns JSON: {"notes": [...], "pedals": [...], "midi_base64": "..."}
+
+    CORS is wide open (allow_origins=["*"]) so this can be called directly
+    from browser JS (the test page in web/index.html, or from Papiano).
     """
-    audio_b64 = item["audio_base64"]
-    transcriber = PianoTranscriber()
-    return transcriber.transcribe.remote(audio_b64)
+    from fastapi import FastAPI
+    from fastapi.middleware.cors import CORSMiddleware
+
+    web_app = FastAPI()
+    web_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    @web_app.post("/transcribe")
+    def transcribe(item: dict):
+        audio_b64 = item["audio_base64"]
+        transcriber = PianoTranscriber()
+        return transcriber.transcribe.remote(audio_b64)
+
+    return web_app

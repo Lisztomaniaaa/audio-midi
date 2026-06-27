@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8" />
+<title>Piano Transcription — Test</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; }
+  h1 { font-size: 1.3rem; }
+  input, button { font-size: 1rem; padding: 8px; margin: 8px 0; }
+  button { cursor: pointer; }
+  #status { margin: 12px 0; font-weight: bold; }
+  pre { background: #f4f4f4; padding: 12px; overflow-x: auto; max-height: 400px; }
+  table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+  th, td { border: 1px solid #ddd; padding: 4px 8px; text-align: left; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+  <h1>Test endpoint transkripsi piano</h1>
+
+  <label for="url">Endpoint URL (.../transcribe):</label><br/>
+  <input id="url" type="text" size="60"
+    value="https://utamairfan44--piano-transcription-web.modal.run/transcribe" />
+
+  <br/>
+  <label for="file">File audio (wav/mp3/dll):</label><br/>
+  <input id="file" type="file" accept="audio/*" />
+
+  <br/>
+  <button id="send">Transkripsi</button>
+
+  <div id="status"></div>
+
+  <div id="result" style="display:none">
+    <p><strong>Notes:</strong> <span id="noteCount"></span> &nbsp;
+       <strong>Pedals:</strong> <span id="pedalCount"></span></p>
+    <a id="downloadMidi" download="output.mid">Download MIDI</a>
+    <h3>Notes pertama (preview)</h3>
+    <table id="notesTable">
+      <thead><tr><th>pitch</th><th>onset</th><th>offset</th><th>velocity</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <script>
+    const sendBtn = document.getElementById("send");
+    const statusEl = document.getElementById("status");
+    const resultEl = document.getElementById("result");
+
+    function toBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(",")[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    sendBtn.addEventListener("click", async () => {
+      const url = document.getElementById("url").value.trim();
+      const fileInput = document.getElementById("file");
+      const file = fileInput.files[0];
+
+      if (!url || !file) {
+        statusEl.textContent = "Isi URL endpoint dan pilih file audio dulu.";
+        return;
+      }
+
+      resultEl.style.display = "none";
+      statusEl.textContent = "Mengirim & menunggu hasil... (bisa beberapa puluh detik, lebih lama kalau cold start)";
+      sendBtn.disabled = true;
+
+      const t0 = performance.now();
+      try {
+        const audioB64 = await toBase64(file);
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ audio_base64: audioB64 }),
+        });
+
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`);
+        }
+
+        const data = await res.json();
+        const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+        statusEl.textContent = `Selesai dalam ${elapsed}s.`;
+
+        document.getElementById("noteCount").textContent = data.notes.length;
+        document.getElementById("pedalCount").textContent = data.pedals.length;
+
+        const midiBytes = atob(data.midi_base64);
+        const arr = new Uint8Array(midiBytes.length);
+        for (let i = 0; i < midiBytes.length; i++) arr[i] = midiBytes.charCodeAt(i);
+        const blob = new Blob([arr], { type: "audio/midi" });
+        document.getElementById("downloadMidi").href = URL.createObjectURL(blob);
+
+        const tbody = document.querySelector("#notesTable tbody");
+        tbody.innerHTML = "";
+        data.notes.slice(0, 30).forEach((n) => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `<td>${n.pitch}</td><td>${n.onset.toFixed(3)}</td><td>${n.offset.toFixed(3)}</td><td>${n.velocity}</td>`;
+          tbody.appendChild(tr);
+        });
+
+        resultEl.style.display = "block";
+      } catch (err) {
+        statusEl.textContent = "Error: " + err.message;
+      } finally {
+        sendBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
