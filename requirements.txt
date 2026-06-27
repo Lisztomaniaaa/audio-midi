@@ -1,8 +1,8 @@
 torch
-timm
 huggingface_hub
 torchlibrosa
 librosa
 mido
 piano_transcription_inference
 numpy
+fastapi[standard]
