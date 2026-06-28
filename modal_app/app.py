@@ -25,9 +25,17 @@ image = (
         "torchaudio==2.5.0",
         "numpy",
         "librosa",
+        "soundfile",
         "mido",
+        "beat-this",
         f"git+https://github.com/EleutherAI/aria-amt.git@{ARIA_AMT_COMMIT}",
         "fastapi[standard]",
+    )
+    # Bake the Beat This! checkpoint into the image so warm containers never
+    # have to download it at request time.
+    .run_commands(
+        "python -c \"from beat_this.inference import File2Beats; "
+        "File2Beats(checkpoint_path='final0', device='cpu')\""
     )
 )
 
@@ -153,22 +161,51 @@ def _beat_position_fn(bpm, beat_times):
     return lambda t: t * beats_per_sec
 
 
-def _build_midi(notes, pedals, bpm, beat_times, quantize):
+def _infer_meter(beats, downbeats):
+    """Beats per bar from the spacing of detected downbeats (4 -> 4/4)."""
+    import numpy as np
+
+    if downbeats.size >= 2 and beats.size >= 2:
+        counts = [
+            int(np.sum((beats >= a - 1e-6) & (beats < b - 1e-6)))
+            for a, b in zip(downbeats[:-1], downbeats[1:])
+        ]
+        counts = [c for c in counts if c > 0]
+        if counts:
+            bpb = int(round(np.median(counts)))
+            if 2 <= bpb <= 7:
+                return bpb
+    return 4
+
+
+def _build_midi(notes, pedals, bpm, beats, downbeats, bpb, quantize):
     import io
 
     import mido
+    import numpy as np
 
     mid = mido.MidiFile(ticks_per_beat=TICKS_PER_BEAT)
     track = mido.MidiTrack()
     mid.tracks.append(track)
     track.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(round(bpm)), time=0))
-    track.append(mido.MetaMessage("time_signature", numerator=4, denominator=4, time=0))
+    track.append(
+        mido.MetaMessage("time_signature", numerator=bpb, denominator=4, time=0)
+    )
 
-    if quantize:
-        pos = _beat_position_fn(bpm, beat_times)
+    if quantize and beats.size >= 2:
+        pos = _beat_position_fn(bpm, beats)
+
+        # Align bar 1 to the first downbeat so measures line up, while keeping
+        # every tick >= 0 (pre-downbeat pickup notes fill a leading partial bar).
+        origin = pos(float(downbeats[0])) if downbeats.size else 0.0
+        all_onsets = [n["onset"] for n in notes] + [p["onset"] for p in pedals]
+        min_pos = min((pos(t) for t in all_onsets), default=0.0)
+        deficit = origin - min_pos
+        pad_bars = int(np.ceil(deficit / bpb)) if deficit > 0 else 0
+        shift = origin - pad_bars * bpb
 
         def to_tick(t, snap):
-            bp = pos(t)
+            bp = pos(t) - shift
             if snap:
                 bp = round(bp * GRID_SUBDIVISIONS) / GRID_SUBDIVISIONS
             return max(0, round(bp * TICKS_PER_BEAT))
@@ -254,6 +291,13 @@ class PianoTranscriber:
 
         self.model = model
         self.audio_transform = AudioTransform().cuda()
+
+        from beat_this.inference import File2Beats
+
+        self.beat_tracker = File2Beats(
+            checkpoint_path="final0",
+            device="cuda" if torch.cuda.is_available() else "cpu",
+        )
 
     @modal.method()
     def transcribe(self, audio_b64: str, quantize: bool = True) -> dict:
@@ -368,6 +412,8 @@ class PianoTranscriber:
         # Load the source audio once for both the offset refinement and the
         # tempo/beat detection that drives the MIDI rhythm grid.
         import librosa
+        import numpy as np
+        import soundfile as sf
 
         with tempfile.NamedTemporaryFile(suffix=".audio") as tmp_audio:
             tmp_audio.write(audio_bytes)
@@ -375,8 +421,31 @@ class PianoTranscriber:
             y, _ = librosa.load(tmp_audio.name, sr=SAMPLE_RATE, mono=True)
 
         notes = _refine_note_offsets(y, notes)
-        bpm, beat_times = _detect_tempo_and_beats(y)
-        midi_bytes = _build_midi(notes, pedals, bpm, beat_times, quantize)
+
+        # Beat This! (neural, ISMIR 2024) tracks beats + downbeats and handles
+        # rubato/expressive piano far better than librosa, which octave-errors
+        # (double-tempo) on solo piano. Fall back to librosa if it returns
+        # nothing usable.
+        beats = downbeats = np.asarray([], dtype=float)
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".wav") as tmp_wav:
+                sf.write(tmp_wav.name, y, SAMPLE_RATE)
+                bt_beats, bt_downbeats = self.beat_tracker(tmp_wav.name)
+            beats = np.asarray(bt_beats, dtype=float)
+            downbeats = np.asarray(bt_downbeats, dtype=float)
+        except Exception:
+            logger.exception("Beat This! tracking failed; falling back to librosa")
+
+        if beats.size >= 2:
+            bpm = 60.0 / float(np.median(np.diff(beats)))
+        else:
+            bpm, beats = _detect_tempo_and_beats(y)
+            downbeats = np.asarray([], dtype=float)
+        if not np.isfinite(bpm) or bpm <= 0:
+            bpm = DEFAULT_BPM
+
+        bpb = _infer_meter(beats, downbeats)
+        midi_bytes = _build_midi(notes, pedals, bpm, beats, downbeats, bpb, quantize)
 
         # notes/pedals stay in raw performance seconds (synced to the audio);
         # the MIDI file carries the tempo-mapped, grid-quantized rhythm.
@@ -384,7 +453,7 @@ class PianoTranscriber:
             "notes": notes,
             "pedals": pedals,
             "tempo": round(bpm, 1),
-            "time_signature": "4/4",
+            "time_signature": f"{bpb}/4",
             "midi_base64": base64.b64encode(midi_bytes).decode("utf-8"),
         }
 
