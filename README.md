@@ -69,6 +69,13 @@ reason klang.io asks the user to pick a tempo range. `tempo_hint` rescales
 the detected beats to the nearest matching density (keeping rubato), or lays
 down a uniform grid if no beats were found.
 
+The MIDI carries a per-beat **tempo map** (not one flat tempo) so playback
+follows the performance's rubato instead of sounding metronomic. Note
+durations are also run through a hand "humanizer": within each hand a note is
+released around the next note's onset, so a run/arpeggio doesn't hold its
+first note through the whole figure — the sustain you hear is the pedal
+(CC64), modelled separately.
+
 `quantize` (optional, default `true`): snap MIDI onsets/durations to a
 1/16-note grid relative to the detected beats so it reads cleanly in notation
 software. Set `false` to keep raw performance timing in the MIDI. The `notes`

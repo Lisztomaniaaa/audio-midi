@@ -58,6 +58,14 @@ SAMPLE_RATE = 16000
 MIN_NOTE_DURATION_S = 0.05
 DECAY_THRESHOLD_RATIO = 0.15
 
+# Hand "humanizer": within one hand the fingers can't keep holding a note once
+# they move to the next one in a run/arpeggio — the sustain you hear is the
+# PEDAL (captured separately as CC64), not the fingers. So each note in a run
+# is released around the next note's onset. Notes struck together (within the
+# chord window) are treated as one press.
+LEGATO_OVERLAP_S = 0.04
+CHORD_WINDOW_S = 0.05
+
 # MIDI rhythm grid. The model emits absolute millisecond timings with no sense
 # of tempo, so the raw MIDI opens at a meaningless 120 BPM and nothing lines up
 # to bars/beats in notation software. We detect the real tempo + beat positions
@@ -121,6 +129,40 @@ def _refine_note_offsets(y, notes: list) -> list:
         refined.append({**note, "offset": round(new_offset, 3)})
 
     return refined
+
+
+def _humanize_durations(notes):
+    """Clip note durations to piano hand physics (see constants above).
+
+    Splits notes into two hands at middle C; within each hand, every note is
+    released around the next distinct onset in that hand, so an ascending
+    arpeggio no longer holds its first note through the whole figure. The
+    pedal (CC64) still carries the actual sustain.
+    """
+    if len(notes) < 2:
+        return notes
+
+    new_offset = {}
+    for is_rh in (True, False):
+        idxs = [i for i, n in enumerate(notes) if (n["pitch"] >= STAFF_SPLIT) == is_rh]
+        idxs.sort(key=lambda i: notes[i]["onset"])
+        for j, i in enumerate(idxs):
+            onset = notes[i]["onset"]
+            nxt = next(
+                (notes[k]["onset"] for k in idxs[j + 1 :]
+                 if notes[k]["onset"] > onset + CHORD_WINDOW_S),
+                None,
+            )
+            if nxt is None:
+                continue
+            clipped = min(notes[i]["offset"], nxt + LEGATO_OVERLAP_S)
+            clipped = max(clipped, onset + MIN_NOTE_DURATION_S)
+            new_offset[i] = round(clipped, 3)
+
+    return [
+        {**n, "offset": new_offset[i]} if i in new_offset else n
+        for i, n in enumerate(notes)
+    ]
 
 
 def _beat_position_fn(beat_times):
@@ -300,10 +342,10 @@ def _build_midi(notes, pedals, bpm, beats, downbeats, bpb, quantize):
     mid = mido.MidiFile(ticks_per_beat=TICKS_PER_BEAT)
     track = mido.MidiTrack()
     mid.tracks.append(track)
-    track.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(round(bpm)), time=0))
-    track.append(
-        mido.MetaMessage("time_signature", numerator=bpb, denominator=4, time=0)
-    )
+
+    # (tick, group, message); group orders events sharing a tick: time_sig (-2)
+    # then tempo (-1) then note/pedal offs (0) before new ons (1, 2).
+    events = [(0, -2, mido.MetaMessage("time_signature", numerator=bpb, denominator=4, time=0))]
 
     if quantize and beats.size >= 2:
         pos = _beat_position_fn(beats)
@@ -322,15 +364,29 @@ def _build_midi(notes, pedals, bpm, beats, downbeats, bpb, quantize):
             if snap:
                 bp = round(bp * GRID_SUBDIVISIONS) / GRID_SUBDIVISIONS
             return max(0, round(bp * TICKS_PER_BEAT))
+
+        # Tempo map: one set_tempo per beat from its real duration, so playback
+        # follows the performance's rubato instead of one flat (monotone) tempo.
+        prev_bpm = None
+        for i, interval in enumerate(np.diff(beats)):
+            if interval <= 0:
+                continue
+            local_bpm = max(20.0, min(400.0, 60.0 / float(interval)))
+            if prev_bpm is not None and abs(local_bpm - prev_bpm) < 1.0:
+                continue
+            prev_bpm = local_bpm
+            btick = max(0, round((pos(float(beats[i])) - shift) * TICKS_PER_BEAT))
+            events.append((btick, -1, mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(local_bpm))))
     else:
         beats_per_sec = bpm / 60.0
 
         def to_tick(t, snap):
             return max(0, round(t * beats_per_sec * TICKS_PER_BEAT))
 
-    # (tick, group, message); group orders events sharing a tick so note/pedal
-    # offs land before new ons and nothing is cut off a beat early.
-    events = []
+    if not any(g == -1 and tk == 0 for tk, g, _ in events):
+        safe_bpm = max(20.0, min(400.0, bpm))
+        events.append((0, -1, mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(safe_bpm))))
+
     for n in notes:
         on = to_tick(n["onset"], True)
         off = max(to_tick(n["offset"], True), on + 1)
@@ -540,6 +596,7 @@ class PianoTranscriber:
             y, _ = librosa.load(tmp_audio.name, sr=SAMPLE_RATE, mono=True)
 
         notes = _refine_note_offsets(y, notes)
+        notes = _humanize_durations(notes)
 
         # Beat This! (neural, ISMIR 2024) tracks beats + downbeats and handles
         # rubato/expressive piano, where classic trackers octave-error
