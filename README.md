@@ -31,18 +31,28 @@ CORS is open (`*`).
 ```
 POST /transcribe
 Header: X-API-Key: <shared secret>
-{ "audio_base64": "<base64 audio bytes>" }
+{ "audio_base64": "<base64 audio bytes>", "quantize": true }
 
 200 OK
 {
   "notes": [{ "pitch": 60, "onset": 1.23, "offset": 1.81, "velocity": 87 }],
   "pedals": [{ "onset": 0.50, "offset": 2.10 }],
+  "tempo": 92.0,
+  "time_signature": "4/4",
   "midi_base64": "..."
 }
 ```
 
-`pitch`: MIDI note number. `onset`/`offset`: seconds. `midi_base64`: standard
-MIDI file with the same notes + sustain pedal (CC64).
+`pitch`: MIDI note number. `onset`/`offset`: seconds, raw performance timing
+synced to the audio. `tempo`: detected BPM. `midi_base64`: standard MIDI file
+with the same notes + sustain pedal (CC64), carrying the detected tempo and a
+4/4 time signature.
+
+`quantize` (optional, default `true`): snap MIDI onsets/durations to a
+1/16-note grid relative to the detected beats so it reads cleanly in notation
+software. Set `false` to keep raw performance timing in the MIDI. The `notes`
+array is always raw timing regardless. Time signature is assumed 4/4; tempo is
+detected per request.
 
 One shared API key, set as a Modal Secret. The Papiano backend holds the
 same key and calls this endpoint server-to-server; per-user access, auth,

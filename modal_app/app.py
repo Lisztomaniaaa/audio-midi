@@ -25,6 +25,7 @@ image = (
         "torchaudio==2.5.0",
         "numpy",
         "librosa",
+        "mido",
         f"git+https://github.com/EleutherAI/aria-amt.git@{ARIA_AMT_COMMIT}",
         "fastapi[standard]",
     )
@@ -48,12 +49,19 @@ SAMPLE_RATE = 16000
 MIN_NOTE_DURATION_S = 0.05
 DECAY_THRESHOLD_RATIO = 0.15
 
+# MIDI rhythm grid. The model emits absolute millisecond timings with no sense
+# of tempo, so the raw MIDI opens at a meaningless 120 BPM and nothing lines up
+# to bars/beats in notation software. We detect the real tempo + beat positions
+# and snap onsets/durations to a 1/16-note grid so the output reads as music.
+TICKS_PER_BEAT = 480
+GRID_SUBDIVISIONS = 4  # 4 per quarter-note beat == 1/16-note grid
+DEFAULT_BPM = 120.0
 
-def _refine_note_offsets(audio_path: str, notes: list) -> list:
+
+def _refine_note_offsets(y, notes: list) -> list:
     import librosa
     import numpy as np
 
-    y, _ = librosa.load(audio_path, sr=SAMPLE_RATE, mono=True)
     hop_length = 256
     # bins_per_octave=12 means one CQT bin per semitone, lining up directly
     # with MIDI pitch numbers (bin 0 == MIDI note 21 == A0).
@@ -104,6 +112,97 @@ def _refine_note_offsets(audio_path: str, notes: list) -> list:
         refined.append({**note, "offset": round(new_offset, 3)})
 
     return refined
+
+
+def _detect_tempo_and_beats(y):
+    import librosa
+    import numpy as np
+
+    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=SAMPLE_RATE)
+    beat_times = librosa.frames_to_time(beat_frames, sr=SAMPLE_RATE)
+    bpm = float(np.atleast_1d(tempo)[0])
+    if not np.isfinite(bpm) or bpm <= 0:
+        bpm = DEFAULT_BPM
+    return bpm, np.asarray(beat_times, dtype=float)
+
+
+def _beat_position_fn(bpm, beat_times):
+    """Maps an absolute time (s) to a fractional beat index.
+
+    Uses the actual detected beat times so the mapping follows tempo drift
+    (rubato): the rhythmic grid stays clean even when the performance speeds
+    up or slows down. Falls back to a fixed tempo if beat tracking failed.
+    """
+    import numpy as np
+
+    if beat_times.size >= 2:
+        median_interval = float(np.median(np.diff(beat_times)))
+
+        def pos(t):
+            if t <= beat_times[0]:
+                return (t - beat_times[0]) / median_interval
+            if t >= beat_times[-1]:
+                return (beat_times.size - 1) + (t - beat_times[-1]) / median_interval
+            i = max(0, min(int(np.searchsorted(beat_times, t) - 1), beat_times.size - 2))
+            span = beat_times[i + 1] - beat_times[i]
+            return i + (t - beat_times[i]) / span if span > 0 else float(i)
+
+        return pos
+
+    beats_per_sec = bpm / 60.0
+    return lambda t: t * beats_per_sec
+
+
+def _build_midi(notes, pedals, bpm, beat_times, quantize):
+    import io
+
+    import mido
+
+    mid = mido.MidiFile(ticks_per_beat=TICKS_PER_BEAT)
+    track = mido.MidiTrack()
+    mid.tracks.append(track)
+    track.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(round(bpm)), time=0))
+    track.append(mido.MetaMessage("time_signature", numerator=4, denominator=4, time=0))
+
+    if quantize:
+        pos = _beat_position_fn(bpm, beat_times)
+
+        def to_tick(t, snap):
+            bp = pos(t)
+            if snap:
+                bp = round(bp * GRID_SUBDIVISIONS) / GRID_SUBDIVISIONS
+            return max(0, round(bp * TICKS_PER_BEAT))
+    else:
+        beats_per_sec = bpm / 60.0
+
+        def to_tick(t, snap):
+            return max(0, round(t * beats_per_sec * TICKS_PER_BEAT))
+
+    # (tick, group, message); group orders events sharing a tick so note/pedal
+    # offs land before new ons and nothing is cut off a beat early.
+    events = []
+    for n in notes:
+        on = to_tick(n["onset"], True)
+        off = max(to_tick(n["offset"], True), on + 1)
+        vel = max(1, min(127, int(n["velocity"])))
+        events.append((on, 1, mido.Message("note_on", note=n["pitch"], velocity=vel)))
+        events.append((off, 0, mido.Message("note_off", note=n["pitch"], velocity=0)))
+    for p in pedals:
+        on = to_tick(p["onset"], False)
+        off = max(to_tick(p["offset"], False), on + 1)
+        events.append((on, 2, mido.Message("control_change", control=64, value=127)))
+        events.append((off, 0, mido.Message("control_change", control=64, value=0)))
+
+    events.sort(key=lambda e: (e[0], e[1]))
+    prev_tick = 0
+    for tick, _group, msg in events:
+        msg.time = tick - prev_tick
+        prev_tick = tick
+        track.append(msg)
+
+    buf = io.BytesIO()
+    mid.save(file=buf)
+    return buf.getvalue()
 
 
 @app.cls(
@@ -157,7 +256,7 @@ class PianoTranscriber:
         self.audio_transform = AudioTransform().cuda()
 
     @modal.method()
-    def transcribe(self, audio_b64: str) -> dict:
+    def transcribe(self, audio_b64: str, quantize: bool = True) -> dict:
         import logging
         import tempfile
 
@@ -248,20 +347,6 @@ class PianoTranscriber:
             for m in midi_dict.note_msgs
         ]
 
-        with tempfile.NamedTemporaryFile(suffix=".audio") as tmp_refine:
-            tmp_refine.write(audio_bytes)
-            tmp_refine.flush()
-            notes = _refine_note_offsets(tmp_refine.name, notes)
-
-        for note_msg, note in zip(midi_dict.note_msgs, notes):
-            note_msg["data"]["end"] = round(note["offset"] * 1000.0)
-
-        midi_file = midi_dict.to_midi()
-        with tempfile.NamedTemporaryFile(suffix=".mid") as tmp_out:
-            midi_file.save(tmp_out.name)
-            tmp_out.seek(0)
-            midi_bytes = tmp_out.read()
-
         pedals = []
         pedal_on_tick = None
         for m in sorted(midi_dict.pedal_msgs, key=lambda m: m["tick"]):
@@ -280,9 +365,26 @@ class PianoTranscriber:
                 {"onset": pedal_on_tick / 1000.0, "offset": last_onset / 1000.0}
             )
 
+        # Load the source audio once for both the offset refinement and the
+        # tempo/beat detection that drives the MIDI rhythm grid.
+        import librosa
+
+        with tempfile.NamedTemporaryFile(suffix=".audio") as tmp_audio:
+            tmp_audio.write(audio_bytes)
+            tmp_audio.flush()
+            y, _ = librosa.load(tmp_audio.name, sr=SAMPLE_RATE, mono=True)
+
+        notes = _refine_note_offsets(y, notes)
+        bpm, beat_times = _detect_tempo_and_beats(y)
+        midi_bytes = _build_midi(notes, pedals, bpm, beat_times, quantize)
+
+        # notes/pedals stay in raw performance seconds (synced to the audio);
+        # the MIDI file carries the tempo-mapped, grid-quantized rhythm.
         return {
             "notes": notes,
             "pedals": pedals,
+            "tempo": round(bpm, 1),
+            "time_signature": "4/4",
             "midi_base64": base64.b64encode(midi_bytes).decode("utf-8"),
         }
 
@@ -308,7 +410,8 @@ def web():
         if x_api_key != os.environ["API_KEY"]:
             raise HTTPException(status_code=401, detail="Invalid API key")
         audio_b64 = item["audio_base64"]
+        quantize = bool(item.get("quantize", True))
         transcriber = PianoTranscriber()
-        return transcriber.transcribe.remote(audio_b64)
+        return transcriber.transcribe.remote(audio_b64, quantize)
 
     return web_app
