@@ -195,6 +195,81 @@ def _assign_hands(notes):
     return is_rh
 
 
+def _classify_clusters(notes):
+    """Segment the notes into musical events: block chord, arpeggio/rolled
+    chord, scale run, trill, or single note. This is the music-aware reading
+    of the texture (vs. treating everything as undifferentiated notes).
+    Returns a list of {type, onset, ...}."""
+    if not notes:
+        return []
+
+    order = sorted(range(len(notes)), key=lambda i: (notes[i]["onset"], notes[i]["pitch"]))
+    clusters = []
+    j = 0
+    while j < len(order):
+        t0 = notes[order[j]]["onset"]
+        c = j
+        while c < len(order) and notes[order[c]]["onset"] <= t0 + CHORD_WINDOW_S:
+            c += 1
+        clusters.append(order[j:c])
+        j = c
+
+    segs = []
+    i = 0
+    while i < len(clusters):
+        cl = clusters[i]
+        if len(cl) >= 2:  # notes struck together -> block chord
+            segs.append({
+                "type": "chord",
+                "onset": round(notes[cl[0]]["onset"], 3),
+                "pitches": sorted(notes[k]["pitch"] for k in cl),
+            })
+            i += 1
+            continue
+
+        # single notes: extend into a fast figure if the next ones follow quickly
+        run = [cl[0]]
+        k = i + 1
+        while k < len(clusters) and len(clusters[k]) == 1:
+            if notes[clusters[k][0]]["onset"] - notes[run[-1]]["onset"] <= 0.18:
+                run.append(clusters[k][0])
+                k += 1
+            else:
+                break
+
+        if len(run) >= 4:
+            pitches = [notes[r]["pitch"] for r in run]
+            steps = [pitches[m + 1] - pitches[m] for m in range(len(pitches) - 1)]
+            if len(set(pitches)) == 2 and all(abs(s) <= 2 for s in steps):
+                typ = "trill"
+            elif all(s > 0 for s in steps) or all(s < 0 for s in steps):
+                avg = abs(pitches[-1] - pitches[0]) / (len(pitches) - 1)
+                typ = "run" if avg <= 2.0 else "arpeggio"
+            else:
+                typ = "figure"
+            segs.append({
+                "type": typ,
+                "onset": round(notes[run[0]]["onset"], 3),
+                "offset": round(notes[run[-1]]["offset"], 3),
+                "notes": len(run),
+            })
+            i = k
+        else:
+            segs.append({
+                "type": "single",
+                "onset": round(notes[cl[0]]["onset"], 3),
+                "pitch": int(notes[cl[0]]["pitch"]),
+            })
+            i += 1
+
+    return segs
+
+
+def _count_types(structure):
+    from collections import Counter
+    return dict(Counter(s["type"] for s in structure))
+
+
 def _separate_voices(notes):
     """Split notes into monophonic voices (within each hand) by greedy
     pitch-continuity streaming: the top melodic line stays one voice, inner
@@ -909,6 +984,7 @@ class PianoTranscriber:
         notes = _refine_note_offsets(y, notes)
         glissandos = _detect_glissandos(notes)
         voices = _separate_voices(notes)
+        structure = _classify_clusters(notes)
         notes_pre = notes
         notes = _humanize_durations(notes, voices)
         clipped = sum(
@@ -978,11 +1054,13 @@ class PianoTranscriber:
             "key": key_name,
             "chords": chords,
             "glissandos": glissandos,
+            "structure": structure,
             "debug": {
                 "notes": len(notes),
                 "voices": len(set(voices)),
                 "durations_clipped": clipped,
                 "glissandos": len(glissandos),
+                "events": _count_types(structure),
             },
             "midi_base64": base64.b64encode(midi_bytes).decode("utf-8"),
             "musicxml": musicxml,

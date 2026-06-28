@@ -57,7 +57,9 @@ synced to the audio. `tempo`: detected BPM. `key`: detected key signature.
 bar, so it reads as a progression rather than one chord per vertical slice).
 `glissandos`: detected glissando runs (long, fast, one-directional,
 mostly-stepwise sequences) as `{onset, offset, start_pitch, end_pitch,
-direction, notes}`.
+direction, notes}`. `structure`: the texture read as musical events — each
+segment tagged `chord` / `arpeggio` / `run` / `trill` / `figure` / `single`
+(with `events` counts in `debug`).
 `midi_base64`: standard MIDI file with the same notes + sustain pedal (CC64),
 carrying the detected tempo and time signature. `musicxml`: an engraved
 2-staff piano score (key + time signature, rhythm in measures) — import into
