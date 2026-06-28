@@ -65,6 +65,7 @@ DECAY_THRESHOLD_RATIO = 0.15
 # chord window) are treated as one press.
 LEGATO_OVERLAP_S = 0.04
 CHORD_WINDOW_S = 0.05
+MAX_HAND_SPAN = 14  # semitones one hand can comfortably span (~a ninth)
 
 # MIDI rhythm grid. The model emits absolute millisecond timings with no sense
 # of tempo, so the raw MIDI opens at a meaningless 120 BPM and nothing lines up
@@ -131,20 +132,73 @@ def _refine_note_offsets(y, notes: list) -> list:
     return refined
 
 
+def _assign_hands(notes):
+    """Assign each note to right/left hand by hand-span limit + continuity
+    (hands move smoothly), not a fixed middle-C line. Notes struck together
+    that span more than one hand can reach are split at their largest gap.
+    Returns a list of bools aligned to `notes` (True = right hand).
+
+    `notes` items need "pitch" and "onset"; pitch may be fractional (a chord's
+    mean) when called on already-grouped notation elements.
+    """
+    n = len(notes)
+    if n == 0:
+        return []
+
+    order = sorted(range(n), key=lambda i: (notes[i]["onset"], notes[i]["pitch"]))
+    is_rh = [True] * n
+    rh_ref, lh_ref = 72.0, 48.0  # priors: right hand ~C5, left hand ~C3
+
+    j = 0
+    while j < len(order):
+        t0 = notes[order[j]]["onset"]
+        c = j
+        while c < len(order) and notes[order[c]]["onset"] <= t0 + CHORD_WINDOW_S:
+            c += 1
+        cluster = sorted(order[j:c], key=lambda i: notes[i]["pitch"])
+
+        lo, hi = notes[cluster[0]]["pitch"], notes[cluster[-1]]["pitch"]
+        if hi - lo > MAX_HAND_SPAN:
+            gap_m = max(
+                range(len(cluster) - 1),
+                key=lambda m: notes[cluster[m + 1]]["pitch"] - notes[cluster[m]]["pitch"],
+            )
+            lh_part, rh_part = cluster[: gap_m + 1], cluster[gap_m + 1 :]
+        else:
+            mean_p = sum(notes[i]["pitch"] for i in cluster) / len(cluster)
+            if abs(mean_p - rh_ref) <= abs(mean_p - lh_ref):
+                rh_part, lh_part = cluster, []
+            else:
+                rh_part, lh_part = [], cluster
+
+        for i in rh_part:
+            is_rh[i] = True
+        for i in lh_part:
+            is_rh[i] = False
+        if rh_part:
+            rh_ref = sum(notes[i]["pitch"] for i in rh_part) / len(rh_part)
+        if lh_part:
+            lh_ref = sum(notes[i]["pitch"] for i in lh_part) / len(lh_part)
+        j = c
+
+    return is_rh
+
+
 def _humanize_durations(notes):
     """Clip note durations to piano hand physics (see constants above).
 
-    Splits notes into two hands at middle C; within each hand, every note is
-    released around the next distinct onset in that hand, so an ascending
-    arpeggio no longer holds its first note through the whole figure. The
-    pedal (CC64) still carries the actual sustain.
+    Assigns hands (see _assign_hands); within each hand, every note is released
+    around the next distinct onset in that hand, so an ascending arpeggio no
+    longer holds its first note through the whole figure. The pedal (CC64)
+    still carries the actual sustain.
     """
     if len(notes) < 2:
         return notes
 
+    hands = _assign_hands(notes)
     new_offset = {}
     for is_rh in (True, False):
-        idxs = [i for i, n in enumerate(notes) if (n["pitch"] >= STAFF_SPLIT) == is_rh]
+        idxs = [i for i in range(len(notes)) if hands[i] == is_rh]
         idxs.sort(key=lambda i: notes[i]["onset"])
         for j, i in enumerate(idxs):
             onset = notes[i]["onset"]
@@ -183,9 +237,6 @@ def _beat_position_fn(beat_times):
         return i + (t - beat_times[i]) / span if span > 0 else float(i)
 
     return pos
-
-
-STAFF_SPLIT = 60  # middle C: pitches >= split go to the right hand (treble)
 
 
 def _readable_sharps(sharps: int) -> int:
@@ -245,10 +296,15 @@ def _build_musicxml(midi_bytes, beats_per_bar):
         part.insert(0, music21.key.KeySignature(sharps))
         parts[hand] = part
 
-    for el in score_in.flatten().notes:
-        top_pitch = max(p.midi for p in el.pitches)
-        hand = "RH" if top_pitch >= STAFF_SPLIT else "LH"
-        parts[hand].insert(el.offset, copy.deepcopy(el))
+    elements = list(score_in.flatten().notes)
+    items = [
+        {"pitch": sum(p.midi for p in el.pitches) / len(el.pitches),
+         "onset": float(el.offset)}
+        for el in elements
+    ]
+    hands = _assign_hands(items)
+    for el, is_rh in zip(elements, hands):
+        parts["RH" if is_rh else "LH"].insert(el.offset, copy.deepcopy(el))
 
     for part in parts.values():
         _respell(part, use_flats)

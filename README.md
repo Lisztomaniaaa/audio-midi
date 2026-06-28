@@ -76,6 +76,11 @@ released around the next note's onset, so a run/arpeggio doesn't hold its
 first note through the whole figure — the sustain you hear is the pedal
 (CC64), modelled separately.
 
+Hands (for the humanizer and the two-staff score) are assigned by hand-span
+limit + continuity — hands move smoothly and one hand spans at most ~a ninth
+— rather than a fixed middle-C line, so a bass line that rises above middle C
+stays in the left hand and wide chords split at their gap.
+
 `quantize` (optional, default `true`): snap MIDI onsets/durations to a
 1/16-note grid relative to the detected beats so it reads cleanly in notation
 software. Set `false` to keep raw performance timing in the MIDI. The `notes`
