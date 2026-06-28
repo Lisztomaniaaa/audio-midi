@@ -31,7 +31,12 @@ CORS is open (`*`).
 ```
 POST /transcribe
 Header: X-API-Key: <shared secret>
-{ "audio_base64": "<base64 audio bytes>", "quantize": true }
+{
+  "audio_base64": "<base64 audio bytes>",
+  "quantize": true,
+  "tempo_hint": 72,
+  "time_signature": "3/4"
+}
 
 200 OK
 {
@@ -54,7 +59,15 @@ measures) — import into notation/arranger software (MuseScore, Sibelius,
 Finale). `null` if engraving failed.
 
 Beat + downbeat tracking uses Beat This! (neural); tempo, time signature, and
-bar alignment are derived from it, with librosa as a fallback.
+bar alignment are derived from it.
+
+`tempo_hint` (optional, BPM) and `time_signature` (optional, e.g. `"3/4"`)
+override the automatic detection. Auto beat tracking is unreliable on
+expressive/rubato solo piano (it half/double-errors or finds no stable
+pulse), so for that material a hint produces far cleaner bars — the same
+reason klang.io asks the user to pick a tempo range. `tempo_hint` rescales
+the detected beats to the nearest matching density (keeping rubato), or lays
+down a uniform grid if no beats were found.
 
 `quantize` (optional, default `true`): snap MIDI onsets/durations to a
 1/16-note grid relative to the detected beats so it reads cleanly in notation

@@ -227,6 +227,53 @@ def _build_musicxml(midi_bytes, beats_per_bar):
     return xml.decode("utf-8"), key_name
 
 
+def _parse_time_signature(ts):
+    """'3/4' -> 3 (beats per bar). Returns None if unusable."""
+    if not ts:
+        return None
+    try:
+        num = int(str(ts).split("/")[0])
+    except (ValueError, IndexError):
+        return None
+    return num if 2 <= num <= 7 else None
+
+
+def _apply_tempo_hint(beats, downbeats, tempo_hint, bpb_hint, audio_dur):
+    """Use a user-supplied tempo to fix the beat grid.
+
+    Auto beat tracking is unreliable on expressive/rubato solo piano (it
+    octave-errors to half/double tempo, or finds no stable pulse). A tempo
+    hint resolves that: it either rescales the detected beats by the nearest
+    power-of-two so their density matches the hint (keeping the real, rubato
+    positions), or — if no beats were found — lays down a uniform grid at the
+    hinted tempo. This mirrors how klang.io asks the user for a tempo range.
+    """
+    import numpy as np
+
+    if not tempo_hint or tempo_hint <= 0:
+        return beats, downbeats
+
+    if beats.size < 2:
+        interval = 60.0 / tempo_hint
+        beats = np.arange(0.0, audio_dur + interval, interval)
+        downbeats = beats[:: (bpb_hint or 4)]
+        return beats, downbeats
+
+    detected = 60.0 / float(np.median(np.diff(beats)))
+    factors = np.array([0.25, 0.5, 1.0, 2.0, 4.0])
+    f = float(factors[np.argmin(np.abs(detected * factors - tempo_hint))])
+    if f > 1.0:
+        n = int(round(f))
+        dense = []
+        for a, b in zip(beats[:-1], beats[1:]):
+            dense.extend(a + (b - a) * k / n for k in range(n))
+        dense.append(float(beats[-1]))
+        beats = np.asarray(dense, dtype=float)  # original beats kept => downbeats stay valid
+    elif f < 1.0:
+        beats = beats[:: int(round(1.0 / f))]
+    return beats, downbeats
+
+
 def _infer_meter(beats, downbeats):
     """Beats per bar from the spacing of detected downbeats (4 -> 4/4)."""
     import numpy as np
@@ -366,7 +413,13 @@ class PianoTranscriber:
         )
 
     @modal.method()
-    def transcribe(self, audio_b64: str, quantize: bool = True) -> dict:
+    def transcribe(
+        self,
+        audio_b64: str,
+        quantize: bool = True,
+        tempo_hint: float = None,
+        time_signature: str = None,
+    ) -> dict:
         import logging
         import tempfile
 
@@ -502,14 +555,20 @@ class PianoTranscriber:
         except Exception:
             logger.exception("Beat This! tracking failed")
 
+        # Optional user hints (klang.io-style) override unreliable auto-detection.
+        bpb_hint = _parse_time_signature(time_signature)
+        beats, downbeats = _apply_tempo_hint(
+            beats, downbeats, tempo_hint, bpb_hint, len(y) / SAMPLE_RATE
+        )
+
         if beats.size >= 2:
             bpm = 60.0 / float(np.median(np.diff(beats)))
             if not np.isfinite(bpm) or bpm <= 0:
-                bpm = DEFAULT_BPM
+                bpm = tempo_hint or DEFAULT_BPM
         else:
-            bpm = DEFAULT_BPM
+            bpm = tempo_hint or DEFAULT_BPM
 
-        bpb = _infer_meter(beats, downbeats)
+        bpb = bpb_hint or _infer_meter(beats, downbeats)
         midi_bytes = _build_midi(notes, pedals, bpm, beats, downbeats, bpb, quantize)
 
         # Engrave a 2-staff piano score (MusicXML) from the quantized MIDI —
@@ -556,7 +615,11 @@ def web():
             raise HTTPException(status_code=401, detail="Invalid API key")
         audio_b64 = item["audio_base64"]
         quantize = bool(item.get("quantize", True))
+        tempo_hint = item.get("tempo_hint")
+        time_signature = item.get("time_signature")
         transcriber = PianoTranscriber()
-        return transcriber.transcribe.remote(audio_b64, quantize)
+        return transcriber.transcribe.remote(
+            audio_b64, quantize, tempo_hint, time_signature
+        )
 
     return web_app
