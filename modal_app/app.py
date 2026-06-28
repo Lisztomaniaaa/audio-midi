@@ -389,6 +389,62 @@ def _infer_meter(beats, downbeats):
     return 4
 
 
+def _downbeats_reliable(beats, downbeats):
+    """True only if the tracked downbeats imply a consistent bar length —
+    otherwise we don't trust them for meter (e.g. rubato solo piano, where
+    nearly every beat got flagged as a downbeat)."""
+    import numpy as np
+    from collections import Counter
+
+    if downbeats.size < 3 or beats.size < 6:
+        return False
+    counts = [
+        int(np.sum((beats >= a - 1e-6) & (beats < b - 1e-6)))
+        for a, b in zip(downbeats[:-1], downbeats[1:])
+    ]
+    counts = [c for c in counts if c > 0]
+    if len(counts) < 2:
+        return False
+    mode, freq = Counter(counts).most_common(1)[0]
+    return freq / len(counts) >= 0.6 and 2 <= mode <= 4
+
+
+def _infer_meter_from_notes(notes, beats):
+    """Infer beats-per-bar + downbeat phase from where the music puts its
+    metric weight: bass notes mark downbeats (waltz "oom-pah-pah", ragtime
+    stride). Autocorrelating a per-beat accent signal reveals the period
+    (3 -> waltz, 2/4 -> ragtime/march). Used when downbeat tracking is
+    unreliable. Returns (beats_per_bar, phase)."""
+    import numpy as np
+
+    if beats.size < 4 or len(notes) < 8:
+        return 4, 0
+
+    pos = _beat_position_fn(beats)
+    n_slots = int(round(pos(max(n["onset"] for n in notes)))) + 1
+    if n_slots < 6:
+        return 4, 0
+
+    # Per-beat weight: each onset counts, lower (bass) pitches count much more
+    # because they carry the downbeat in stride/waltz accompaniment.
+    weight = np.zeros(n_slots)
+    for n in notes:
+        b = int(round(pos(n["onset"])))
+        if 0 <= b < n_slots:
+            weight[b] += 1.0 + max(0.0, (60 - n["pitch"]) / 6.0)
+
+    w = weight - weight.mean()
+    ac = {p: float(np.sum(w[:-p] * w[p:])) for p in (2, 3, 4) if n_slots > p}
+    if not ac:
+        return 4, 0
+    bpb = max(ac, key=ac.get)
+    # 2/4 and 4/4 are metrically nested; prefer the larger common meter on ties.
+    if bpb == 2 and ac.get(4, float("-inf")) >= 0.8 * ac[2]:
+        bpb = 4
+    phase = max(range(bpb), key=lambda ph: float(weight[ph::bpb].sum()))
+    return bpb, phase
+
+
 def _build_midi(notes, pedals, bpm, beats, downbeats, bpb, quantize):
     import io
 
@@ -681,7 +737,19 @@ class PianoTranscriber:
         else:
             bpm = tempo_hint or DEFAULT_BPM
 
-        bpb = bpb_hint or _infer_meter(beats, downbeats)
+        # Meter: explicit hint > consistent tracked downbeats > music-theory
+        # inference from note accents (handles waltz 3/4 and ragtime phase when
+        # the tracker's downbeats can't be trusted).
+        if bpb_hint:
+            bpb = bpb_hint
+        elif _downbeats_reliable(beats, downbeats):
+            bpb = _infer_meter(beats, downbeats)
+        elif beats.size >= 2:
+            bpb, phase = _infer_meter_from_notes(notes, beats)
+            downbeats = beats[phase::bpb]
+        else:
+            bpb = _infer_meter(beats, downbeats)
+
         midi_bytes = _build_midi(notes, pedals, bpm, beats, downbeats, bpb, quantize)
 
         # Engrave a 2-staff piano score (MusicXML) from the quantized MIDI —

@@ -81,6 +81,11 @@ limit + continuity — hands move smoothly and one hand spans at most ~a ninth
 — rather than a fixed middle-C line, so a bass line that rises above middle C
 stays in the left hand and wide chords split at their gap.
 
+Meter is taken from an explicit `time_signature` hint first; otherwise from
+the tracked downbeats when they're consistent; otherwise inferred from note
+accents (bass notes mark downbeats), which recovers waltz 3/4 and the
+ragtime/march downbeat phase when downbeat tracking is unreliable.
+
 `quantize` (optional, default `true`): snap MIDI onsets/durations to a
 1/16-note grid relative to the detected beats so it reads cleanly in notation
 software. Set `false` to keep raw performance timing in the MIDI. The `notes`
