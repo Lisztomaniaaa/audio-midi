@@ -76,11 +76,13 @@ the detected beats to the nearest matching density (keeping rubato), or lays
 down a uniform grid if no beats were found.
 
 The MIDI carries a per-beat **tempo map** (not one flat tempo) so playback
-follows the performance's rubato instead of sounding metronomic. Note
-durations are also run through a hand "humanizer": within each hand a note is
-released around the next note's onset, so a run/arpeggio doesn't hold its
-first note through the whole figure — the sustain you hear is the pedal
-(CC64), modelled separately.
+follows the performance's rubato instead of sounding metronomic. Note durations are run through a per-voice "humanizer". Notes are first split
+into monophonic voices within each hand (greedy pitch-continuity streaming),
+then each note is released around the next note's onset in its own voice — so
+a run/arpeggio doesn't hold its first note, while a sustained melody or inner
+voice is NOT cut short by faster notes elsewhere in the same hand. The pedal
+(CC64) carries the actual sustain. The response includes a `debug` block
+(note/voice counts, durations clipped) for inspecting this.
 
 Hands (for the humanizer and the two-staff score) are assigned by hand-span
 limit + continuity — hands move smoothly and one hand spans at most ~a ninth

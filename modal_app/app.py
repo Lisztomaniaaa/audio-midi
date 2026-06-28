@@ -66,6 +66,7 @@ DECAY_THRESHOLD_RATIO = 0.15
 LEGATO_OVERLAP_S = 0.04
 CHORD_WINDOW_S = 0.05
 MAX_HAND_SPAN = 14  # semitones one hand can comfortably span (~a ninth)
+VOICE_MAX_JUMP = 16  # max pitch jump (semitones) to keep notes in one voice
 
 # Glissando: a long, fast, one-directional, mostly-stepwise run.
 GLISS_MIN_NOTES = 6
@@ -190,6 +191,55 @@ def _assign_hands(notes):
     return is_rh
 
 
+def _separate_voices(notes):
+    """Split notes into monophonic voices (within each hand) by greedy
+    pitch-continuity streaming: the top melodic line stays one voice, inner
+    parts another. This is what lets a held melody note ring while a faster
+    inner voice in the same hand moves underneath. Returns a voice id per
+    note (aligned to `notes`)."""
+    n = len(notes)
+    if n == 0:
+        return []
+
+    hands = _assign_hands(notes)
+    voice_of = [0] * n
+    next_vid = 0
+    for hand in (True, False):
+        idxs = sorted(
+            (i for i in range(n) if hands[i] == hand),
+            key=lambda i: notes[i]["onset"],
+        )
+        voices = []  # each: {"last_pitch": int, "vid": int}
+        j = 0
+        while j < len(idxs):
+            t0 = notes[idxs[j]]["onset"]
+            c = j
+            while c < len(idxs) and notes[idxs[c]]["onset"] <= t0 + CHORD_WINDOW_S:
+                c += 1
+            cluster = sorted(idxs[j:c], key=lambda i: -notes[i]["pitch"])  # high to low
+            used = set()
+            for i in cluster:
+                pitch = notes[i]["pitch"]
+                best = None
+                for vi, v in enumerate(voices):
+                    if vi in used:
+                        continue
+                    d = abs(v["last_pitch"] - pitch)
+                    if best is None or d < best[1]:
+                        best = (vi, d)
+                if best is not None and best[1] <= VOICE_MAX_JUMP:
+                    vi = best[0]
+                else:
+                    voices.append({"last_pitch": pitch, "vid": next_vid})
+                    vi = len(voices) - 1
+                    next_vid += 1
+                used.add(vi)
+                voices[vi]["last_pitch"] = pitch
+                voice_of[i] = voices[vi]["vid"]
+            j = c
+    return voice_of
+
+
 def _detect_glissandos(notes):
     """Find glissando runs: long, fast, one-directional, mostly-stepwise
     sequences within a hand (the model emits them as many tiny notes). Returns
@@ -246,21 +296,26 @@ def _detect_glissandos(notes):
     return out
 
 
-def _humanize_durations(notes):
-    """Clip note durations to piano hand physics (see constants above).
+def _humanize_durations(notes, voices):
+    """Clip note durations to piano hand physics, per voice.
 
-    Assigns hands (see _assign_hands); within each hand, every note is released
-    around the next distinct onset in that hand, so an ascending arpeggio no
-    longer holds its first note through the whole figure. The pedal (CC64)
-    still carries the actual sustain.
+    Within each monophonic voice a note is released around the next note's
+    onset in that same voice, so a run/arpeggio doesn't hold its first note —
+    but a sustained melody or inner voice is NOT cut short by faster notes
+    elsewhere in the same hand (that's why we clip per voice, not per hand).
+    The pedal (CC64) still carries the actual sustain.
     """
     if len(notes) < 2:
         return notes
 
-    hands = _assign_hands(notes)
+    from collections import defaultdict
+
+    by_voice = defaultdict(list)
+    for i, v in enumerate(voices):
+        by_voice[v].append(i)
+
     new_offset = {}
-    for is_rh in (True, False):
-        idxs = [i for i in range(len(notes)) if hands[i] == is_rh]
+    for idxs in by_voice.values():
         idxs.sort(key=lambda i: notes[i]["onset"])
         for j, i in enumerate(idxs):
             onset = notes[i]["onset"]
@@ -818,7 +873,13 @@ class PianoTranscriber:
 
         notes = _refine_note_offsets(y, notes)
         glissandos = _detect_glissandos(notes)
-        notes = _humanize_durations(notes)
+        voices = _separate_voices(notes)
+        notes_pre = notes
+        notes = _humanize_durations(notes, voices)
+        clipped = sum(
+            1 for a, b in zip(notes_pre, notes)
+            if b["offset"] < a["offset"] - 1e-6
+        )
 
         # Beat This! (neural, ISMIR 2024) tracks beats + downbeats and handles
         # rubato/expressive piano, where classic trackers octave-error
@@ -882,6 +943,12 @@ class PianoTranscriber:
             "key": key_name,
             "chords": chords,
             "glissandos": glissandos,
+            "debug": {
+                "notes": len(notes),
+                "voices": len(set(voices)),
+                "durations_clipped": clipped,
+                "glissandos": len(glissandos),
+            },
             "midi_base64": base64.b64encode(midi_bytes).decode("utf-8"),
             "musicxml": musicxml,
         }
