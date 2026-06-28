@@ -27,6 +27,7 @@ image = (
         "librosa",
         "soundfile",
         "mido",
+        "music21",
         "beat-this",
         f"git+https://github.com/EleutherAI/aria-amt.git@{ARIA_AMT_COMMIT}",
         "fastapi[standard]",
@@ -159,6 +160,91 @@ def _beat_position_fn(bpm, beat_times):
 
     beats_per_sec = bpm / 60.0
     return lambda t: t * beats_per_sec
+
+
+STAFF_SPLIT = 60  # middle C: pitches >= split go to the right hand (treble)
+
+
+def _readable_sharps(sharps: int) -> int:
+    """Prefer the enharmonic key signature with fewer accidentals
+    (e.g. C# major / 7 sharps -> Db major / 5 flats)."""
+    alt = sharps - 12 if sharps > 0 else sharps + 12
+    if -7 <= alt <= 7 and abs(alt) < abs(sharps):
+        return alt
+    return sharps
+
+
+def _respell(part, use_flats: bool) -> None:
+    """Re-spell accidentals toward the key's direction so a flat key shows
+    Db, not C#."""
+    for n in part.recurse().notes:
+        for p in n.pitches:
+            if p.accidental is None:
+                continue
+            if use_flats and p.accidental.alter > 0:
+                p.getHigherEnharmonic(inPlace=True)
+            elif not use_flats and p.accidental.alter < 0:
+                p.getLowerEnharmonic(inPlace=True)
+
+
+def _build_musicxml(midi_bytes, beats_per_bar):
+    """Engrave the quantized MIDI into a 2-staff piano score (MusicXML).
+
+    Detects the key, splits hands at middle C, re-spells accidentals to match
+    the key, and lays the rhythm out in measures. Returns (xml, key_name).
+    """
+    import tempfile
+
+    import music21
+
+    with tempfile.NamedTemporaryFile(suffix=".mid") as tmp_mid:
+        tmp_mid.write(midi_bytes)
+        tmp_mid.flush()
+        score_in = music21.converter.parse(tmp_mid.name)
+
+    try:
+        analyzed = score_in.analyze("key")
+        sharps = _readable_sharps(analyzed.sharps)
+        mode = analyzed.mode
+    except Exception:
+        sharps, mode = 0, "major"
+    use_flats = sharps < 0
+    key_name = music21.key.KeySignature(sharps).asKey(mode).name
+
+    ts_str = f"{beats_per_bar}/4"
+    parts = {}
+    for hand, clef in (("RH", music21.clef.TrebleClef()), ("LH", music21.clef.BassClef())):
+        part = music21.stream.Part()
+        part.partName = f"Piano ({hand})"
+        part.insert(0, clef)
+        part.insert(0, music21.meter.TimeSignature(ts_str))
+        part.insert(0, music21.key.KeySignature(sharps))
+        parts[hand] = part
+
+    import copy
+
+    for el in score_in.flatten().notes:
+        top_pitch = max(p.midi for p in el.pitches)
+        hand = "RH" if top_pitch >= STAFF_SPLIT else "LH"
+        parts[hand].insert(el.offset, copy.deepcopy(el))
+
+    for part in parts.values():
+        _respell(part, use_flats)
+        part.makeMeasures(inPlace=True)
+        part.makeRests(fillGaps=True, inPlace=True)
+
+    score_out = music21.stream.Score()
+    score_out.insert(0, parts["RH"])
+    score_out.insert(0, parts["LH"])
+    score_out.insert(
+        0,
+        music21.layout.StaffGroup(
+            [parts["RH"], parts["LH"]], symbol="brace", barTogether=True
+        ),
+    )
+
+    xml = music21.musicxml.m21ToXml.GeneralObjectExporter(score_out).parse()
+    return xml.decode("utf-8"), key_name
 
 
 def _infer_meter(beats, downbeats):
@@ -447,6 +533,15 @@ class PianoTranscriber:
         bpb = _infer_meter(beats, downbeats)
         midi_bytes = _build_midi(notes, pedals, bpm, beats, downbeats, bpb, quantize)
 
+        # Engrave a 2-staff piano score (MusicXML) from the quantized MIDI —
+        # this is what notation/arranger software imports as real sheet music.
+        musicxml = None
+        key_name = None
+        try:
+            musicxml, key_name = _build_musicxml(midi_bytes, bpb)
+        except Exception:
+            logger.exception("MusicXML engraving failed")
+
         # notes/pedals stay in raw performance seconds (synced to the audio);
         # the MIDI file carries the tempo-mapped, grid-quantized rhythm.
         return {
@@ -454,7 +549,9 @@ class PianoTranscriber:
             "pedals": pedals,
             "tempo": round(bpm, 1),
             "time_signature": f"{bpb}/4",
+            "key": key_name,
             "midi_base64": base64.b64encode(midi_bytes).decode("utf-8"),
+            "musicxml": musicxml,
         }
 
 

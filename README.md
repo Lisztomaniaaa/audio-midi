@@ -39,14 +39,22 @@ Header: X-API-Key: <shared secret>
   "pedals": [{ "onset": 0.50, "offset": 2.10 }],
   "tempo": 92.0,
   "time_signature": "4/4",
-  "midi_base64": "..."
+  "key": "Db major",
+  "midi_base64": "...",
+  "musicxml": "<?xml ...>"
 }
 ```
 
 `pitch`: MIDI note number. `onset`/`offset`: seconds, raw performance timing
-synced to the audio. `tempo`: detected BPM. `midi_base64`: standard MIDI file
-with the same notes + sustain pedal (CC64), carrying the detected tempo and a
-4/4 time signature.
+synced to the audio. `tempo`: detected BPM. `key`: detected key signature.
+`midi_base64`: standard MIDI file with the same notes + sustain pedal (CC64),
+carrying the detected tempo and time signature. `musicxml`: an engraved
+2-staff piano score (hands split at middle C, key + time signature, rhythm in
+measures) — import into notation/arranger software (MuseScore, Sibelius,
+Finale). `null` if engraving failed.
+
+Beat + downbeat tracking uses Beat This! (neural); tempo, time signature, and
+bar alignment are derived from it, with librosa as a fallback.
 
 `quantize` (optional, default `true`): snap MIDI onsets/durations to a
 1/16-note grid relative to the detected beats so it reads cleanly in notation
