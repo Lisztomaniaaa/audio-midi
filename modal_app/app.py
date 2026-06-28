@@ -123,43 +123,24 @@ def _refine_note_offsets(y, notes: list) -> list:
     return refined
 
 
-def _detect_tempo_and_beats(y):
-    import librosa
+def _beat_position_fn(beat_times):
+    """Maps an absolute time (s) to a fractional beat index, following the
+    detected beat times so the grid tracks tempo drift (rubato). The caller
+    guarantees at least two beats."""
     import numpy as np
 
-    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=SAMPLE_RATE)
-    beat_times = librosa.frames_to_time(beat_frames, sr=SAMPLE_RATE)
-    bpm = float(np.atleast_1d(tempo)[0])
-    if not np.isfinite(bpm) or bpm <= 0:
-        bpm = DEFAULT_BPM
-    return bpm, np.asarray(beat_times, dtype=float)
+    median_interval = float(np.median(np.diff(beat_times)))
 
+    def pos(t):
+        if t <= beat_times[0]:
+            return (t - beat_times[0]) / median_interval
+        if t >= beat_times[-1]:
+            return (beat_times.size - 1) + (t - beat_times[-1]) / median_interval
+        i = max(0, min(int(np.searchsorted(beat_times, t) - 1), beat_times.size - 2))
+        span = beat_times[i + 1] - beat_times[i]
+        return i + (t - beat_times[i]) / span if span > 0 else float(i)
 
-def _beat_position_fn(bpm, beat_times):
-    """Maps an absolute time (s) to a fractional beat index.
-
-    Uses the actual detected beat times so the mapping follows tempo drift
-    (rubato): the rhythmic grid stays clean even when the performance speeds
-    up or slows down. Falls back to a fixed tempo if beat tracking failed.
-    """
-    import numpy as np
-
-    if beat_times.size >= 2:
-        median_interval = float(np.median(np.diff(beat_times)))
-
-        def pos(t):
-            if t <= beat_times[0]:
-                return (t - beat_times[0]) / median_interval
-            if t >= beat_times[-1]:
-                return (beat_times.size - 1) + (t - beat_times[-1]) / median_interval
-            i = max(0, min(int(np.searchsorted(beat_times, t) - 1), beat_times.size - 2))
-            span = beat_times[i + 1] - beat_times[i]
-            return i + (t - beat_times[i]) / span if span > 0 else float(i)
-
-        return pos
-
-    beats_per_sec = bpm / 60.0
-    return lambda t: t * beats_per_sec
+    return pos
 
 
 STAFF_SPLIT = 60  # middle C: pitches >= split go to the right hand (treble)
@@ -193,6 +174,7 @@ def _build_musicxml(midi_bytes, beats_per_bar):
     Detects the key, splits hands at middle C, re-spells accidentals to match
     the key, and lays the rhythm out in measures. Returns (xml, key_name).
     """
+    import copy
     import tempfile
 
     import music21
@@ -220,8 +202,6 @@ def _build_musicxml(midi_bytes, beats_per_bar):
         part.insert(0, music21.meter.TimeSignature(ts_str))
         part.insert(0, music21.key.KeySignature(sharps))
         parts[hand] = part
-
-    import copy
 
     for el in score_in.flatten().notes:
         top_pitch = max(p.midi for p in el.pitches)
@@ -279,7 +259,7 @@ def _build_midi(notes, pedals, bpm, beats, downbeats, bpb, quantize):
     )
 
     if quantize and beats.size >= 2:
-        pos = _beat_position_fn(bpm, beats)
+        pos = _beat_position_fn(beats)
 
         # Align bar 1 to the first downbeat so measures line up, while keeping
         # every tick >= 0 (pre-downbeat pickup notes fill a leading partial bar).
@@ -509,9 +489,9 @@ class PianoTranscriber:
         notes = _refine_note_offsets(y, notes)
 
         # Beat This! (neural, ISMIR 2024) tracks beats + downbeats and handles
-        # rubato/expressive piano far better than librosa, which octave-errors
-        # (double-tempo) on solo piano. Fall back to librosa if it returns
-        # nothing usable.
+        # rubato/expressive piano, where classic trackers octave-error
+        # (double-tempo) on solo piano. If it yields no usable beats, the MIDI
+        # is written at a default tempo without a rhythm grid.
         beats = downbeats = np.asarray([], dtype=float)
         try:
             with tempfile.NamedTemporaryFile(suffix=".wav") as tmp_wav:
@@ -520,14 +500,13 @@ class PianoTranscriber:
             beats = np.asarray(bt_beats, dtype=float)
             downbeats = np.asarray(bt_downbeats, dtype=float)
         except Exception:
-            logger.exception("Beat This! tracking failed; falling back to librosa")
+            logger.exception("Beat This! tracking failed")
 
         if beats.size >= 2:
             bpm = 60.0 / float(np.median(np.diff(beats)))
+            if not np.isfinite(bpm) or bpm <= 0:
+                bpm = DEFAULT_BPM
         else:
-            bpm, beats = _detect_tempo_and_beats(y)
-            downbeats = np.asarray([], dtype=float)
-        if not np.isfinite(bpm) or bpm <= 0:
             bpm = DEFAULT_BPM
 
         bpb = _infer_meter(beats, downbeats)
