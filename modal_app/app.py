@@ -261,6 +261,51 @@ def _respell(part, use_flats: bool) -> None:
                 p.getLowerEnharmonic(inPlace=True)
 
 
+_CHORD_TEMPLATES = [
+    ("", (0, 4, 7)), ("m", (0, 3, 7)), ("7", (0, 4, 7, 10)),
+    ("maj7", (0, 4, 7, 11)), ("m7", (0, 3, 7, 10)), ("dim", (0, 3, 6)),
+    ("aug", (0, 4, 8)),
+]
+_SHARP_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+_FLAT_NAMES = ["C", "D-", "D", "E-", "E", "F", "G-", "G", "A-", "A", "B-", "B"]
+
+
+def _analyze_chords(score_in, beats_per_bar, use_flats):
+    """Per-bar chord progression via chroma + template matching (one symbol
+    per bar, repeats collapsed). Aggregating a whole bar ignores passing
+    tones, so it reads as a real progression instead of one 'chord' per
+    vertical slice. Returns a list of {"bar": int, "symbol": str}."""
+    import numpy as np
+    from collections import defaultdict
+
+    names = _FLAT_NAMES if use_flats else _SHARP_NAMES
+    bars = defaultdict(lambda: np.zeros(12))
+    for el in score_in.flatten().notes:
+        bar = int(float(el.offset) // beats_per_bar)
+        dur = max(0.25, float(el.quarterLength))
+        for p in el.pitches:
+            bars[bar][p.midi % 12] += dur
+
+    progression = []
+    last = None
+    for bar in sorted(bars):
+        chroma = bars[bar]
+        if chroma.sum() <= 0:
+            continue
+        best = None
+        for root in range(12):
+            for suffix, intervals in _CHORD_TEMPLATES:
+                inside = sum(chroma[(root + i) % 12] for i in intervals)
+                score = inside - 0.55 * (chroma.sum() - inside)
+                if best is None or score > best[0]:
+                    best = (score, root, suffix)
+        symbol = names[best[1]] + best[2]
+        if symbol != last:
+            progression.append({"bar": bar, "symbol": symbol})
+            last = symbol
+    return progression
+
+
 def _build_musicxml(midi_bytes, beats_per_bar):
     """Engrave the quantized MIDI into a 2-staff piano score (MusicXML).
 
@@ -321,8 +366,10 @@ def _build_musicxml(midi_bytes, beats_per_bar):
         ),
     )
 
+    chords = _analyze_chords(score_in, beats_per_bar, use_flats)
+
     xml = music21.musicxml.m21ToXml.GeneralObjectExporter(score_out).parse()
-    return xml.decode("utf-8"), key_name
+    return xml.decode("utf-8"), key_name, chords
 
 
 def _parse_time_signature(ts):
@@ -756,8 +803,9 @@ class PianoTranscriber:
         # this is what notation/arranger software imports as real sheet music.
         musicxml = None
         key_name = None
+        chords = []
         try:
-            musicxml, key_name = _build_musicxml(midi_bytes, bpb)
+            musicxml, key_name, chords = _build_musicxml(midi_bytes, bpb)
         except Exception:
             logger.exception("MusicXML engraving failed")
 
@@ -769,6 +817,7 @@ class PianoTranscriber:
             "tempo": round(bpm, 1),
             "time_signature": f"{bpb}/4",
             "key": key_name,
+            "chords": chords,
             "midi_base64": base64.b64encode(midi_bytes).decode("utf-8"),
             "musicxml": musicxml,
         }

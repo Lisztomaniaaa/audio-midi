@@ -45,6 +45,7 @@ Header: X-API-Key: <shared secret>
   "tempo": 92.0,
   "time_signature": "4/4",
   "key": "Db major",
+  "chords": [{ "bar": 0, "symbol": "Db" }, { "bar": 5, "symbol": "Bbm7" }],
   "midi_base64": "...",
   "musicxml": "<?xml ...>"
 }
@@ -52,11 +53,13 @@ Header: X-API-Key: <shared secret>
 
 `pitch`: MIDI note number. `onset`/`offset`: seconds, raw performance timing
 synced to the audio. `tempo`: detected BPM. `key`: detected key signature.
+`chords`: per-bar chord progression (chroma + template matching over each
+bar, so it reads as a progression rather than one chord per vertical slice).
 `midi_base64`: standard MIDI file with the same notes + sustain pedal (CC64),
 carrying the detected tempo and time signature. `musicxml`: an engraved
-2-staff piano score (hands split at middle C, key + time signature, rhythm in
-measures) — import into notation/arranger software (MuseScore, Sibelius,
-Finale). `null` if engraving failed.
+2-staff piano score (key + time signature, rhythm in measures) — import into
+notation/arranger software (MuseScore, Sibelius, Finale). `null` if engraving
+failed.
 
 Beat + downbeat tracking uses Beat This! (neural); tempo, time signature, and
 bar alignment are derived from it.
