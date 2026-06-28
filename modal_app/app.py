@@ -56,7 +56,7 @@ SAMPLE_RATE = 16000
 # This refines each predicted offset against the actual per-pitch decay in
 # the source audio, so it only ever shortens a note, never lengthens one.
 MIN_NOTE_DURATION_S = 0.05
-DECAY_THRESHOLD_RATIO = 0.15
+DECAY_THRESHOLD_RATIO = 0.20
 
 # Hand "humanizer": within one hand the fingers can't keep holding a note once
 # they move to the next one in a run/arpeggio — the sustain you hear is the
@@ -403,38 +403,52 @@ def _smooth_glissandos(notes, runs):
 
 
 def _humanize_durations(notes, voices):
-    """Clip note durations to piano hand physics, per voice.
+    """Clip note durations to piano hand physics.
 
-    Within each monophonic voice a note is released around the next note's
-    onset in that same voice, so a run/arpeggio doesn't hold its first note —
-    but a sustained melody or inner voice is NOT cut short by faster notes
-    elsewhere in the same hand (that's why we clip per voice, not per hand).
-    The pedal (CC64) still carries the actual sustain.
+    The lead (top) voice in each hand may sustain over faster inner activity,
+    so it's clipped only to the next note in its OWN voice — a held melody
+    rings. Accompaniment voices are released around the next note anywhere in
+    that hand, so inner/bass notes don't ring on and muddy the texture. The
+    pedal (CC64) still carries the real sustain.
     """
     if len(notes) < 2:
         return notes
 
     from collections import defaultdict
 
+    hands = _assign_hands(notes)
+
+    # Lead voice per hand = the voice with the highest mean pitch (the melody).
+    pitches_by = defaultdict(list)
+    for i in range(len(notes)):
+        pitches_by[(hands[i], voices[i])].append(notes[i]["pitch"])
+    means = defaultdict(dict)
+    for (h, v), ps in pitches_by.items():
+        means[h][v] = sum(ps) / len(ps)
+    lead_voice = {h: max(vm, key=vm.get) for h, vm in means.items()}
+
     by_voice = defaultdict(list)
-    for i, v in enumerate(voices):
-        by_voice[v].append(i)
+    by_hand = defaultdict(list)
+    for i in range(len(notes)):
+        by_voice[voices[i]].append(i)
+        by_hand[hands[i]].append(i)
+    for pool in (*by_voice.values(), *by_hand.values()):
+        pool.sort(key=lambda i: notes[i]["onset"])
 
     new_offset = {}
-    for idxs in by_voice.values():
-        idxs.sort(key=lambda i: notes[i]["onset"])
-        for j, i in enumerate(idxs):
-            onset = notes[i]["onset"]
-            nxt = next(
-                (notes[k]["onset"] for k in idxs[j + 1 :]
-                 if notes[k]["onset"] > onset + CHORD_WINDOW_S),
-                None,
-            )
-            if nxt is None:
-                continue
-            clipped = min(notes[i]["offset"], nxt + LEGATO_OVERLAP_S)
-            clipped = max(clipped, onset + MIN_NOTE_DURATION_S)
-            new_offset[i] = round(clipped, 3)
+    for i in range(len(notes)):
+        onset = notes[i]["onset"]
+        is_lead = lead_voice.get(hands[i]) == voices[i]
+        pool = by_voice[voices[i]] if is_lead else by_hand[hands[i]]
+        nxt = next(
+            (notes[k]["onset"] for k in pool if notes[k]["onset"] > onset + CHORD_WINDOW_S),
+            None,
+        )
+        if nxt is None:
+            continue
+        clipped = min(notes[i]["offset"], nxt + LEGATO_OVERLAP_S)
+        clipped = max(clipped, onset + MIN_NOTE_DURATION_S)
+        new_offset[i] = round(clipped, 3)
 
     return [
         {**n, "offset": new_offset[i]} if i in new_offset else n

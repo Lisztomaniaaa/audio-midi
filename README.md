@@ -85,13 +85,14 @@ triplet) — so fast runs don't collapse onto one tick and triplets aren't
 forced onto a binary grid.
 
 The MIDI carries a per-beat **tempo map** (not one flat tempo) so playback
-follows the performance's rubato instead of sounding metronomic. Note durations are run through a per-voice "humanizer". Notes are first split
-into monophonic voices within each hand (greedy pitch-continuity streaming),
-then each note is released around the next note's onset in its own voice — so
-a run/arpeggio doesn't hold its first note, while a sustained melody or inner
-voice is NOT cut short by faster notes elsewhere in the same hand. The pedal
-(CC64) carries the actual sustain. The response includes a `debug` block
-(note/voice counts, durations clipped) for inspecting this.
+follows the performance's rubato instead of sounding metronomic. Note durations are run through a "humanizer". Notes are first split into
+monophonic voices within each hand (greedy pitch-continuity streaming). The
+lead (top) voice in each hand may sustain over faster inner activity, so it's
+released only around the next note in its own voice — a held melody rings.
+Accompaniment voices are released around the next note anywhere in that hand,
+so inner/bass notes don't ring on and muddy the texture. The pedal (CC64)
+carries the actual sustain. The response includes a `debug` block (note/voice
+counts, durations clipped) for inspecting this.
 
 Hands (for the humanizer and the two-staff score) are assigned by hand-span
 limit + continuity — hands move smoothly and one hand spans at most ~a ninth
