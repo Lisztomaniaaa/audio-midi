@@ -319,15 +319,15 @@ def _separate_voices(notes):
     return voice_of
 
 
-def _detect_glissandos(notes):
-    """Find glissando runs: long, fast, one-directional, mostly-stepwise
-    sequences within a hand (the model emits them as many tiny notes). Returns
-    a list of {onset, offset, start_pitch, end_pitch, direction, notes}."""
+def _glissando_runs(notes):
+    """Return glissando runs as lists of note indices: long, fast,
+    one-directional, mostly-stepwise sequences within a hand (the model emits
+    them as many tiny notes)."""
     if len(notes) < GLISS_MIN_NOTES:
         return []
 
     hands = _assign_hands(notes)
-    out = []
+    runs = []
     for hand in (True, False):
         idxs = sorted(
             (i for i in range(len(notes)) if hands[i] == hand),
@@ -359,20 +359,47 @@ def _detect_glissandos(notes):
                 and span >= GLISS_MIN_SPAN
                 and span / (len(run) - 1) <= GLISS_MAX_STEP
             ):
-                out.append({
-                    "onset": round(notes[run[0]]["onset"], 3),
-                    "offset": round(notes[run[-1]]["offset"], 3),
-                    "start_pitch": int(notes[run[0]]["pitch"]),
-                    "end_pitch": int(notes[run[-1]]["pitch"]),
-                    "direction": "up" if direction > 0 else "down",
-                    "notes": len(run),
-                })
+                runs.append(run)
                 i = j
             else:
                 i += 1
+    return runs
 
+
+def _glissando_summary(notes, runs):
+    out = []
+    for run in runs:
+        out.append({
+            "onset": round(notes[run[0]]["onset"], 3),
+            "offset": round(notes[run[-1]]["offset"], 3),
+            "start_pitch": int(notes[run[0]]["pitch"]),
+            "end_pitch": int(notes[run[-1]]["pitch"]),
+            "direction": "up" if notes[run[-1]]["pitch"] > notes[run[0]]["pitch"] else "down",
+            "notes": len(run),
+        })
     out.sort(key=lambda g: g["onset"])
     return out
+
+
+def _smooth_glissandos(notes, runs):
+    """Make detected glissandos sweep evenly: respace each run's onsets
+    linearly between its start and end, and tie each note legato to the next.
+    Returns (new_notes, set_of_smoothed_indices). Those indices are later
+    exempted from grid quantization so the even spacing survives."""
+    notes = [dict(n) for n in notes]
+    smoothed = set()
+    for run in runs:
+        run = sorted(run, key=lambda i: notes[i]["onset"])
+        t0, t1 = notes[run[0]]["onset"], notes[run[-1]]["onset"]
+        if len(run) < 2 or t1 <= t0:
+            continue
+        span = t1 - t0
+        for k, i in enumerate(run):
+            notes[i]["onset"] = round(t0 + span * k / (len(run) - 1), 3)
+            smoothed.add(i)
+        for k, i in enumerate(run[:-1]):
+            notes[i]["offset"] = round(notes[run[k + 1]]["onset"] + LEGATO_OVERLAP_S, 3)
+    return notes, smoothed
 
 
 def _humanize_durations(notes, voices):
@@ -715,7 +742,7 @@ def _local_grids(positions):
     return grids
 
 
-def _build_midi(notes, pedals, bpm, beats, downbeats, bpb, quantize):
+def _build_midi(notes, pedals, bpm, beats, downbeats, bpb, quantize, gliss_indices=frozenset()):
     import io
 
     import mido
@@ -741,7 +768,9 @@ def _build_midi(notes, pedals, bpm, beats, downbeats, bpb, quantize):
         pad_bars = int(np.ceil(deficit / bpb)) if deficit > 0 else 0
         shift = origin - pad_bars * bpb
 
-        beat_grids = _local_grids([pos(n["onset"]) - shift for n in notes])
+        beat_grids = _local_grids(
+            [pos(n["onset"]) - shift for i, n in enumerate(notes) if i not in gliss_indices]
+        )
 
         def to_tick(t, snap):
             bp = pos(t) - shift
@@ -773,9 +802,10 @@ def _build_midi(notes, pedals, bpm, beats, downbeats, bpb, quantize):
         safe_bpm = max(20.0, min(400.0, bpm))
         events.append((0, -1, mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(safe_bpm))))
 
-    for n in notes:
-        on = to_tick(n["onset"], True)
-        off = max(to_tick(n["offset"], True), on + 1)
+    for i, n in enumerate(notes):
+        snap = i not in gliss_indices
+        on = to_tick(n["onset"], snap)
+        off = max(to_tick(n["offset"], snap), on + 1)
         vel = max(1, min(127, int(n["velocity"])))
         events.append((on, 1, mido.Message("note_on", note=n["pitch"], velocity=vel)))
         events.append((off, 0, mido.Message("note_off", note=n["pitch"], velocity=0)))
@@ -982,7 +1012,8 @@ class PianoTranscriber:
             y, _ = librosa.load(tmp_audio.name, sr=SAMPLE_RATE, mono=True)
 
         notes = _refine_note_offsets(y, notes)
-        glissandos = _detect_glissandos(notes)
+        gliss_runs = _glissando_runs(notes)
+        glissandos = _glissando_summary(notes, gliss_runs)
         voices = _separate_voices(notes)
         structure = _classify_clusters(notes)
         notes_pre = notes
@@ -991,6 +1022,8 @@ class PianoTranscriber:
             1 for a, b in zip(notes_pre, notes)
             if b["offset"] < a["offset"] - 1e-6
         )
+        # Smooth glissandos into an even sweep (and exempt them from the grid).
+        notes, gliss_indices = _smooth_glissandos(notes, gliss_runs)
 
         # Beat This! (neural, ISMIR 2024) tracks beats + downbeats and handles
         # rubato/expressive piano, where classic trackers octave-error
@@ -1032,7 +1065,9 @@ class PianoTranscriber:
         else:
             bpb = _infer_meter(beats, downbeats)
 
-        midi_bytes = _build_midi(notes, pedals, bpm, beats, downbeats, bpb, quantize)
+        midi_bytes = _build_midi(
+            notes, pedals, bpm, beats, downbeats, bpb, quantize, gliss_indices
+        )
 
         # Engrave a 2-staff piano score (MusicXML) from the quantized MIDI —
         # this is what notation/arranger software imports as real sheet music.

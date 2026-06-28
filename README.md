@@ -57,7 +57,9 @@ synced to the audio. `tempo`: detected BPM. `key`: detected key signature.
 bar, so it reads as a progression rather than one chord per vertical slice).
 `glissandos`: detected glissando runs (long, fast, one-directional,
 mostly-stepwise sequences) as `{onset, offset, start_pitch, end_pitch,
-direction, notes}`. `structure`: the texture read as musical events — each
+direction, notes}`. Detected runs are smoothed — their onsets are respaced
+evenly across the run and tied legato, and they bypass grid quantization so
+the sweep stays even instead of choppy. `structure`: the texture read as musical events — each
 segment tagged `chord` / `arpeggio` / `run` / `trill` / `figure` / `single`
 (with `events` counts in `debug`).
 `midi_base64`: standard MIDI file with the same notes + sustain pedal (CC64),
