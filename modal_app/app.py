@@ -79,7 +79,11 @@ GLISS_MIN_SPAN = 7  # total semitones covered (at least a fifth)
 # to bars/beats in notation software. We detect the real tempo + beat positions
 # and snap onsets/durations to a 1/16-note grid so the output reads as music.
 TICKS_PER_BEAT = 480
-GRID_SUBDIVISIONS = 4  # 4 per quarter-note beat == 1/16-note grid
+GRID_SUBDIVISIONS = 4  # default subdivisions per beat (1/16-note grid)
+# Candidate per-beat grids: binary 16th(4)/32nd(8) and triplet 8th(3)/16th(6)/
+# 32nd(12). 480 is divisible by all of them, so every snap lands on an exact
+# integer tick.
+GRID_CANDIDATES = (3, 4, 6, 8, 12)
 DEFAULT_BPM = 120.0
 
 
@@ -609,6 +613,33 @@ def _infer_meter_from_notes(notes, beats):
     return bpb, phase
 
 
+def _local_grids(positions):
+    """Per beat, pick the rhythm grid (binary 16th/32nd or triplet) that fits
+    that beat's onsets with least error and no collisions — so fast runs don't
+    collapse onto one tick and triplets aren't forced onto a binary grid.
+    Returns {beat_index: subdivisions}."""
+    import numpy as np
+    from collections import defaultdict
+
+    by_beat = defaultdict(list)
+    for p in positions:
+        b = int(np.floor(p))
+        by_beat[b].append(p - b)
+
+    grids = {}
+    for b, fracs in by_beat.items():
+        best = None
+        for g in GRID_CANDIDATES:
+            snapped = [round(f * g) for f in fracs]
+            collisions = len(snapped) - len(set(snapped))
+            err = sum(abs(f - s / g) for f, s in zip(fracs, snapped))
+            score = err + 0.4 * collisions + 0.02 * g  # prefer fit, no collapse, simpler
+            if best is None or score < best[0]:
+                best = (score, g)
+        grids[b] = best[1]
+    return grids
+
+
 def _build_midi(notes, pedals, bpm, beats, downbeats, bpb, quantize):
     import io
 
@@ -635,10 +666,14 @@ def _build_midi(notes, pedals, bpm, beats, downbeats, bpb, quantize):
         pad_bars = int(np.ceil(deficit / bpb)) if deficit > 0 else 0
         shift = origin - pad_bars * bpb
 
+        beat_grids = _local_grids([pos(n["onset"]) - shift for n in notes])
+
         def to_tick(t, snap):
             bp = pos(t) - shift
             if snap:
-                bp = round(bp * GRID_SUBDIVISIONS) / GRID_SUBDIVISIONS
+                b = int(np.floor(bp))
+                g = beat_grids.get(b, GRID_SUBDIVISIONS)
+                bp = b + round((bp - b) * g) / g
             return max(0, round(bp * TICKS_PER_BEAT))
 
         # Tempo map: one set_tempo per beat from its real duration, so playback

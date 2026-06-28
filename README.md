@@ -75,6 +75,11 @@ reason klang.io asks the user to pick a tempo range. `tempo_hint` rescales
 the detected beats to the nearest matching density (keeping rubato), or lays
 down a uniform grid if no beats were found.
 
+Quantization is local per beat: each beat picks the grid that fits its onsets
+best with no collisions — binary (1/16, 1/32) or triplet (1/8, 1/16, 1/32
+triplet) — so fast runs don't collapse onto one tick and triplets aren't
+forced onto a binary grid.
+
 The MIDI carries a per-beat **tempo map** (not one flat tempo) so playback
 follows the performance's rubato instead of sounding metronomic. Note durations are run through a per-voice "humanizer". Notes are first split
 into monophonic voices within each hand (greedy pitch-continuity streaming),
