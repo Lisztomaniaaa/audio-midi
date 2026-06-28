@@ -55,6 +55,9 @@ Header: X-API-Key: <shared secret>
 synced to the audio. `tempo`: detected BPM. `key`: detected key signature.
 `chords`: per-bar chord progression (chroma + template matching over each
 bar, so it reads as a progression rather than one chord per vertical slice).
+`glissandos`: detected glissando runs (long, fast, one-directional,
+mostly-stepwise sequences) as `{onset, offset, start_pitch, end_pitch,
+direction, notes}`.
 `midi_base64`: standard MIDI file with the same notes + sustain pedal (CC64),
 carrying the detected tempo and time signature. `musicxml`: an engraved
 2-staff piano score (key + time signature, rhythm in measures) — import into

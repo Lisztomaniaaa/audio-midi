@@ -67,6 +67,12 @@ LEGATO_OVERLAP_S = 0.04
 CHORD_WINDOW_S = 0.05
 MAX_HAND_SPAN = 14  # semitones one hand can comfortably span (~a ninth)
 
+# Glissando: a long, fast, one-directional, mostly-stepwise run.
+GLISS_MIN_NOTES = 6
+GLISS_MAX_IOI = 0.12  # seconds between consecutive notes (fast)
+GLISS_MAX_STEP = 2.5  # avg semitones/step (stepwise/chromatic, not leaps)
+GLISS_MIN_SPAN = 7  # total semitones covered (at least a fifth)
+
 # MIDI rhythm grid. The model emits absolute millisecond timings with no sense
 # of tempo, so the raw MIDI opens at a meaningless 120 BPM and nothing lines up
 # to bars/beats in notation software. We detect the real tempo + beat positions
@@ -182,6 +188,62 @@ def _assign_hands(notes):
         j = c
 
     return is_rh
+
+
+def _detect_glissandos(notes):
+    """Find glissando runs: long, fast, one-directional, mostly-stepwise
+    sequences within a hand (the model emits them as many tiny notes). Returns
+    a list of {onset, offset, start_pitch, end_pitch, direction, notes}."""
+    if len(notes) < GLISS_MIN_NOTES:
+        return []
+
+    hands = _assign_hands(notes)
+    out = []
+    for hand in (True, False):
+        idxs = sorted(
+            (i for i in range(len(notes)) if hands[i] == hand),
+            key=lambda i: notes[i]["onset"],
+        )
+        i = 0
+        while i < len(idxs) - 1:
+            run = [idxs[i]]
+            direction = 0
+            j = i + 1
+            while j < len(idxs):
+                prev, cur = notes[run[-1]], notes[idxs[j]]
+                step = cur["pitch"] - prev["pitch"]
+                d = (step > 0) - (step < 0)
+                if (
+                    cur["onset"] - prev["onset"] <= GLISS_MAX_IOI
+                    and 0 < abs(step) <= 4
+                    and (direction == 0 or d == direction)
+                ):
+                    direction = direction or d
+                    run.append(idxs[j])
+                    j += 1
+                else:
+                    break
+
+            span = abs(notes[run[-1]]["pitch"] - notes[run[0]]["pitch"])
+            if (
+                len(run) >= GLISS_MIN_NOTES
+                and span >= GLISS_MIN_SPAN
+                and span / (len(run) - 1) <= GLISS_MAX_STEP
+            ):
+                out.append({
+                    "onset": round(notes[run[0]]["onset"], 3),
+                    "offset": round(notes[run[-1]]["offset"], 3),
+                    "start_pitch": int(notes[run[0]]["pitch"]),
+                    "end_pitch": int(notes[run[-1]]["pitch"]),
+                    "direction": "up" if direction > 0 else "down",
+                    "notes": len(run),
+                })
+                i = j
+            else:
+                i += 1
+
+    out.sort(key=lambda g: g["onset"])
+    return out
 
 
 def _humanize_durations(notes):
@@ -755,6 +817,7 @@ class PianoTranscriber:
             y, _ = librosa.load(tmp_audio.name, sr=SAMPLE_RATE, mono=True)
 
         notes = _refine_note_offsets(y, notes)
+        glissandos = _detect_glissandos(notes)
         notes = _humanize_durations(notes)
 
         # Beat This! (neural, ISMIR 2024) tracks beats + downbeats and handles
@@ -818,6 +881,7 @@ class PianoTranscriber:
             "time_signature": f"{bpb}/4",
             "key": key_name,
             "chords": chords,
+            "glissandos": glissandos,
             "midi_base64": base64.b64encode(midi_bytes).decode("utf-8"),
             "musicxml": musicxml,
         }
