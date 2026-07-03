@@ -1,7 +1,7 @@
 # Papiano Transcribe
 
 Piano audio → MIDI transcription service for Papiano. Modal-hosted, T4 GPU,
-scale-to-zero.
+scale-to-zero. Proprietary — see `LICENSE`.
 
 Checkpoint cached on a Modal Volume, seeded once via `scripts/setup_checkpoint_volume.py`.
 
@@ -85,7 +85,9 @@ triplet) — so fast runs don't collapse onto one tick and triplets aren't
 forced onto a binary grid.
 
 The MIDI carries a per-beat **tempo map** (not one flat tempo) so playback
-follows the performance's rubato instead of sounding metronomic. Note durations are run through a "humanizer". Notes are first split into
+follows the performance's rubato instead of sounding metronomic.
+
+Note durations are run through a "humanizer". Notes are first split into
 monophonic voices within each hand (greedy pitch-continuity streaming). The
 lead (top) voice in each hand may sustain over faster inner activity, so it's
 released only around the next note in its own voice — a held melody rings.
@@ -124,3 +126,17 @@ python scripts/test_endpoint.py --url <base url>/transcribe --audio song.wav --o
 
 Write the new checkpoint into the `papiano-transcribe-checkpoints` volume and
 redeploy.
+
+## Licensing
+
+This code is proprietary to Papiano (see `LICENSE`). Python dependencies
+(torch, torchaudio, librosa, mido, music21, beat-this, aria-amt) are all
+permissively licensed (BSD/MIT/ISC/Apache-2.0) and fine for commercial use.
+
+**Open item:** the Aria-AMT checkpoint (`piano-medium-double-1.0.safetensors`,
+hosted in the `loubb/aria-midi` HF dataset) is distributed under
+**CC-BY-NC-SA 4.0 — non-commercial**. The aria-amt code itself is Apache-2.0,
+but the trained weights carry the dataset repo's NC license. Papiano is a
+paid product, so this needs to be resolved (commercial permission from the
+rights holder, a differently-licensed checkpoint, or a self-trained model)
+before relying on this checkpoint in production long-term.
