@@ -6,6 +6,6 @@ soundfile
 mido
 music21
 beat-this
-git+https://github.com/EleutherAI/aria-amt.git@a1ab73fc901d1759ec3bc173c146b3c6a3040261
+piano_transcription_inference
 fastapi[standard]
 requests
