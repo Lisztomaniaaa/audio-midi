@@ -25,15 +25,19 @@ measured degradation on noisy input — roughly 5% relative F1 drop at 12dB
 SNR, 10% at 9dB SNR (see arXiv:2410.14122, which benchmarks noise-injection
 augmentation on this exact model). Two levers:
 
-1. **Cheap, already-available**: lower `onset_threshold` (default 0.3) and
-   `frame_threshold` (default 0.1) — trades precision for recall, catches
+1. **Done**: lowered `onset_threshold` (0.3 → 0.15) and `frame_threshold`
+   (0.1 → 0.05) in `modal_app/app.py` — trades precision for recall, catches
    more/weaker onsets in noisy audio at the cost of more false positives.
-   Not yet wired up as a configurable param in `modal_app/app.py` — that's
-   the first, low-effort step.
+   Deployed; values are a first guess, not yet tuned against a labeled eval
+   set (see open questions).
 2. **Real fix, needs training**: noise-augmented fine-tuning — inject
-   synthetic noise/reverb/compression artifacts into MAESTRO during
-   training (the approach the above paper validates). This is the actual
-   ML work; the threshold tweak is a stopgap.
+   synthetic noise/reverb/compression artifacts during training (the
+   approach arXiv:2410.14122 validates). This is the actual ML work; the
+   threshold tweak is a stopgap. **Do not use MAESTRO audio directly as the
+   base for this** — it's CC-BY-NC-SA 4.0, not safe for us to train on (see
+   the correction in `01-genre-coverage.md`). Needs a cleanly-licensed base
+   corpus first (e.g. synthetic audio rendered from public-domain/licensed
+   MIDI), same constraint as goal 1.
 
 ## Open questions
 
