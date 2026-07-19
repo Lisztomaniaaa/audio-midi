@@ -43,6 +43,12 @@ checkpoint_volume = modal.Volume.from_name(
 api_key_secret = modal.Secret.from_name("papiano-api-key")
 
 SAMPLE_RATE = 16000
+# piano_transcription_inference's own defaults (onset=0.3, frame=0.1) are
+# tuned for clean studio recordings (its MAESTRO training data). Lowered here
+# so weaker onsets in noisy/low-quality source audio still clear the bar,
+# trading some false positives for fewer missed notes.
+ONSET_THRESHOLD = 0.15
+FRAME_THRESHOLD = 0.05
 # Note-off prediction is the noisiest part of AMT models generally, and tends
 # to err toward predicting notes longer than they actually sound, especially
 # in pedal-heavy passages where other notes' resonance bleeds into the audio.
@@ -860,6 +866,10 @@ class PianoTranscriber:
             device="cuda" if torch.cuda.is_available() else "cpu",
             checkpoint_path=checkpoint_path,
         )
+        # Re-read from the instance on every .transcribe() call, so setting
+        # these post-construction is sufficient (see ONSET_THRESHOLD comment).
+        self.transcriptor.onset_threshold = ONSET_THRESHOLD
+        self.transcriptor.frame_threshold = FRAME_THRESHOLD
 
         from beat_this.inference import File2Beats
 
