@@ -1,44 +1,32 @@
 # Goal 3: Smart handling of non-piano instruments
 
-Scope needs to be pinned down first — "smart arrangement" could mean two
-quite different things:
+**Scope, decided:** isolate the piano part from a mixed recording (piano +
+vocals/drums/other instruments), then transcribe just that — not generating
+a piano arrangement for recordings that have no piano at all (that's a much
+harder generative-arrangement problem and explicitly out of scope for now).
 
-**(A) Isolate the piano part from a mixed recording, then transcribe just
-that.** E.g. a song with piano + vocals + drums — pull out the piano stem,
-run the existing pipeline on it. This is the more tractable interpretation:
-source separation (Demucs, MIT-licensed, Meta; or Spleeter, MIT-licensed,
-Deezer) already does instrument-stem separation reasonably well, could
-likely be fine-tuned/adapted specifically for piano isolation. Pipeline
-becomes: separate → transcribe the piano stem with the existing model →
-same output as today.
+## Approach
 
-**(B) Generate a piano arrangement/reduction of a full band or orchestral
-recording that has no piano part at all** — condense a full mix into an
-idiomatic 2-hand piano reduction (like a "piano cover" arranger would).
-This is a much harder, more open-ended research problem — it's generative
-arrangement, not transcription, and needs its own model/approach entirely
-(closer to what a human arranger does than what an AMT model does).
-
-## Open question (blocks scoping the rest of this doc)
-
-Which of these is actually wanted — clean up input audio that has other
-instruments alongside piano (A), or turn a non-piano recording into a piano
-arrangement (B)? They're different products. Confirm before estimating
-effort or picking an approach.
-
-## If (A): rough approach
-
-1. Source separation stage (Demucs or similar) ahead of the existing
-   transcription pipeline, isolating the piano stem.
+1. Source separation stage ahead of the existing transcription pipeline,
+   isolating the piano stem. Candidates: Demucs (MIT-licensed, Meta — best
+   general-purpose separation quality) or Spleeter (MIT-licensed, Deezer —
+   lighter weight). Neither ships a piano-specific stem out of the box
+   (usual stems are vocals/drums/bass/other), so "other" would need to
+   double as the piano stem, or the separator needs fine-tuning/adapting
+   for a dedicated piano stem.
 2. Existing `modal_app/app.py` pipeline runs unchanged on the isolated
-   stem.
+   stem — no changes needed downstream of separation.
 3. Evaluate isolation quality's effect on transcription accuracy — stem
    separation isn't perfect and introduces its own artifacts (bleed,
    phasing) that could reintroduce the "bad audio" problem from goal 2.
+   Worth checking whether the same onset/frame threshold tuning from goal 2
+   helps here too.
 
-## If (B): rough approach
+## Open questions
 
-Needs its own research spike — no existing off-the-shelf model does
-audio-to-piano-reduction end-to-end well. Likely a multi-stage pipeline
-(full transcription of all instruments → harmonic/melodic reduction logic
-→ piano-idiomatic voicing) rather than a single model.
+- Detection: does every request need a "does this contain non-piano
+  instruments" check first (skip separation when it's already solo piano,
+  to avoid wasted compute + separation artifacts on clean input)?
+- Licensing: confirm Demucs/Spleeter checkpoint licenses commercially
+  before depending on either (same class of check as the Aria-AMT issue —
+  don't assume, verify).
