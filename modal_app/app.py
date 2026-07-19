@@ -8,14 +8,8 @@ import base64
 
 import modal
 
-CHECKPOINT_FILENAME = "piano-medium-double-1.0.safetensors"
+CHECKPOINT_FILENAME = "note_F1=0.9677_pedal_F1=0.9186.pth"
 CHECKPOINT_DIR = "/checkpoints"
-MODEL_NAME = "medium-double"
-
-# Pinned commit of github.com/EleutherAI/aria-amt — this code calls a few of
-# its internal (non-public) inference helpers directly, so an unpinned
-# install could silently break on a future upstream refactor.
-ARIA_AMT_COMMIT = "a1ab73fc901d1759ec3bc173c146b3c6a3040261"
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -29,7 +23,7 @@ image = (
         "mido",
         "music21",
         "beat-this",
-        f"git+https://github.com/EleutherAI/aria-amt.git@{ARIA_AMT_COMMIT}",
+        "piano_transcription_inference",
         "fastapi[standard]",
     )
     # Bake the Beat This! checkpoint into the image so warm containers never
@@ -49,10 +43,9 @@ checkpoint_volume = modal.Volume.from_name(
 api_key_secret = modal.Secret.from_name("papiano-api-key")
 
 SAMPLE_RATE = 16000
-# Aria-AMT's own note-off prediction is the noisiest part of the model (this
-# is the harder half of "onset+offset F1" in its benchmarks) and it tends to
-# err toward predicting notes longer than they actually sound, especially in
-# pedal-heavy passages where other notes' resonance bleeds into the audio.
+# Note-off prediction is the noisiest part of AMT models generally, and tends
+# to err toward predicting notes longer than they actually sound, especially
+# in pedal-heavy passages where other notes' resonance bleeds into the audio.
 # This refines each predicted offset against the actual per-pitch decay in
 # the source audio, so it only ever shortens a note, never lengthens one.
 MIN_NOTE_DURATION_S = 0.05
@@ -853,11 +846,7 @@ class PianoTranscriber:
         import os
 
         import torch
-        from amt.audio import AudioTransform
-        from amt.config import load_model_config
-        from amt.inference.model import AmtEncoderDecoder, ModelConfig
-        from amt.tokenizer import AmtTokenizer
-        from amt.utils import _load_weight
+        from piano_transcription_inference import PianoTranscription
 
         checkpoint_path = os.path.join(CHECKPOINT_DIR, CHECKPOINT_FILENAME)
         if not os.path.exists(checkpoint_path):
@@ -867,29 +856,10 @@ class PianoTranscriber:
                 "seed the volume."
             )
 
-        self.tokenizer = AmtTokenizer()
-
-        model_config = ModelConfig(**load_model_config(MODEL_NAME))
-        model_config.set_vocab_size(self.tokenizer.vocab_size)
-        model = AmtEncoderDecoder(model_config)
-
-        model_state = _load_weight(ckpt_path=checkpoint_path)
-        model_state = {
-            (k[len("_orig_mod.") :] if k.startswith("_orig_mod.") else k): v
-            for k, v in model_state.items()
-        }
-        model.load_state_dict(model_state)
-
-        model.decoder.setup_cache(
-            batch_size=1,
-            max_seq_len=4096,
-            dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float,
+        self.transcriptor = PianoTranscription(
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            checkpoint_path=checkpoint_path,
         )
-        model.cuda()
-        model.eval()
-
-        self.model = model
-        self.audio_transform = AudioTransform().cuda()
 
         from beat_this.inference import File2Beats
 
@@ -909,121 +879,35 @@ class PianoTranscriber:
         import logging
         import tempfile
 
-        from amt.data import get_wav_segments
-        from amt.inference.transcribe import (
-            CHUNK_LEN_MS,
-            LEN_MS,
-            STRIDE_FACTOR,
-            _get_silent_intervals,
-            _process_silent_intervals,
-            _shift_onset,
-            _truncate_seq,
-            process_segments,
-        )
-
-        logger = logging.getLogger(__name__)
-        tokenizer = self.tokenizer
-        audio_bytes = base64.b64decode(audio_b64)
-
-        # Mirrors aria-amt's own transcribe_file(), but calls process_segments()
-        # in-process instead of handing segments off to its multiprocessing
-        # GPU-worker queue (overkill for one request on an already-loaded model).
-        with tempfile.NamedTemporaryFile(suffix=".audio") as tmp_in:
-            tmp_in.write(audio_bytes)
-            tmp_in.flush()
-
-            seq = [tokenizer.bos_tok]
-            concat_seq = [tokenizer.bos_tok]
-            idx = 0
-            for curr_audio_segment in get_wav_segments(
-                audio_path=tmp_in.name,
-                stride_factor=STRIDE_FACTOR,
-                pad_last=True,
-            ):
-                init_idx = len(seq)
-                silent_intervals = _get_silent_intervals(curr_audio_segment)
-                input_seq = list(seq)
-
-                results = process_segments(
-                    tasks=[((curr_audio_segment, seq), 0)],
-                    model=self.model,
-                    audio_transform=self.audio_transform,
-                    tokenizer=tokenizer,
-                    logger=logger,
-                )
-                seq = results[0]
-
-                seq_adj = _process_silent_intervals(
-                    seq, intervals=silent_intervals, tokenizer=tokenizer
-                )
-                if len(seq_adj) < len(seq) - 15:
-                    seq = seq_adj
-
-                try:
-                    next_seq = _truncate_seq(
-                        seq, CHUNK_LEN_MS, LEN_MS - CHUNK_LEN_MS
-                    )
-                except Exception:
-                    try:
-                        seq = _truncate_seq(
-                            input_seq, CHUNK_LEN_MS - 2, CHUNK_LEN_MS
-                        )
-                    except Exception:
-                        seq = [tokenizer.bos_tok]
-                else:
-                    if seq[-1] == tokenizer.eos_tok:
-                        seq = seq[:-1]
-                    concat_seq += _shift_onset(seq[init_idx:], idx * CHUNK_LEN_MS)
-                    seq = [tokenizer.bos_tok] if len(next_seq) == 1 else next_seq
-
-                idx += 1
-
-        last_onset = next(
-            tok[1]
-            for tok in reversed(concat_seq)
-            if isinstance(tok, tuple) and tok[0] == "onset"
-        )
-        midi_dict = tokenizer.detokenize(concat_seq, last_onset)
-        midi_dict.remove_redundant_pedals()
-
-        notes = [
-            {
-                "pitch": int(m["data"]["pitch"]),
-                "onset": m["data"]["start"] / 1000.0,
-                "offset": m["data"]["end"] / 1000.0,
-                "velocity": int(m["data"]["velocity"]),
-            }
-            for m in midi_dict.note_msgs
-        ]
-
-        pedals = []
-        pedal_on_tick = None
-        for m in sorted(midi_dict.pedal_msgs, key=lambda m: m["tick"]):
-            if m["data"] == 1 and pedal_on_tick is None:
-                pedal_on_tick = m["tick"]
-            elif m["data"] == 0 and pedal_on_tick is not None:
-                pedals.append(
-                    {
-                        "onset": pedal_on_tick / 1000.0,
-                        "offset": m["tick"] / 1000.0,
-                    }
-                )
-                pedal_on_tick = None
-        if pedal_on_tick is not None:
-            pedals.append(
-                {"onset": pedal_on_tick / 1000.0, "offset": last_onset / 1000.0}
-            )
-
-        # Load the source audio once for both the offset refinement and the
-        # tempo/beat detection that drives the MIDI rhythm grid.
         import librosa
         import numpy as np
         import soundfile as sf
 
+        logger = logging.getLogger(__name__)
+        audio_bytes = base64.b64decode(audio_b64)
+
+        # Load the source audio once — feeds the model directly, plus the
+        # offset refinement and tempo/beat detection below.
         with tempfile.NamedTemporaryFile(suffix=".audio") as tmp_audio:
             tmp_audio.write(audio_bytes)
             tmp_audio.flush()
             y, _ = librosa.load(tmp_audio.name, sr=SAMPLE_RATE, mono=True)
+
+        transcribed = self.transcriptor.transcribe(y, None)
+
+        notes = [
+            {
+                "pitch": int(ev["midi_note"]),
+                "onset": float(ev["onset_time"]),
+                "offset": float(ev["offset_time"]),
+                "velocity": int(ev["velocity"]),
+            }
+            for ev in transcribed["est_note_events"]
+        ]
+        pedals = [
+            {"onset": float(ev["onset_time"]), "offset": float(ev["offset_time"])}
+            for ev in transcribed["est_pedal_events"]
+        ]
 
         notes = _refine_note_offsets(y, notes)
         gliss_runs = _glissando_runs(notes)
