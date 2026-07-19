@@ -130,20 +130,19 @@ redeploy.
 ## Licensing
 
 This code is proprietary to Papiano (see `LICENSE`). Python dependencies
-(torch, torchaudio, librosa, mido, music21, beat-this,
-piano_transcription_inference) are all permissively licensed
-(BSD/MIT/ISC/Apache-2.0) and fine for commercial use.
+(torch, torchaudio, librosa, mido, music21, beat-this, aria-amt) are all
+permissively licensed (BSD/MIT/ISC/Apache-2.0) and fine for commercial use.
 
-The piano transcription model (Kong et al., "high-resolution piano
-transcription", served via the `piano_transcription_inference` package) is
-Apache-2.0 code with an Apache-2.0-adjacent, commercial-friendly checkpoint:
-the pretrained weights (`note_F1=0.9677_pedal_F1=0.9186.pth`, hosted on
-[Zenodo](https://zenodo.org/record/4034264)) are **CC-BY 4.0** —
-redistribution and commercial use are explicitly allowed, conditional only
-on attribution. Credit: Qiuqiang Kong et al., ByteDance.
+**Open item:** the Aria-AMT checkpoint (`piano-medium-double-1.0.safetensors`,
+hosted in the `loubb/aria-midi` HF dataset) is distributed under
+**CC-BY-NC-SA 4.0 — non-commercial**. The aria-amt code itself is Apache-2.0,
+but the trained weights carry the dataset repo's NC license. Papiano offers
+a paid credit option (primarily to fund server/maintenance costs and deter
+abuse, not for profit), which is still commercial use under this license, so
+it needs to be resolved before relying on this checkpoint in production
+long-term.
 
-This replaces an earlier Aria-AMT-based pipeline: Aria-AMT's checkpoint
-turned out to be CC-BY-NC-SA 4.0 (non-commercial), which conflicted with
-Papiano's paid credit option. No commercial license was obtained from the
-checkpoint's author, so the model was swapped out entirely rather than
-risk relying on it in production.
+Status: a commercial licensing request was sent to the checkpoint's author
+(Louis Bradshaw, l.b.bradshaw@qmul.ac.uk) on 2026-07-03 — pending response.
+Fallback options if unresolved: a differently-licensed checkpoint, or a
+self-trained model.

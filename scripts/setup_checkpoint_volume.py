@@ -1,15 +1,15 @@
-"""One-time: download the piano transcription checkpoint into the Modal Volume.
+"""One-time: download the Aria-AMT checkpoint into the Modal Volume.
 
 Usage: modal run scripts/setup_checkpoint_volume.py
 """
 
 import modal
 
-CHECKPOINT_FILENAME = "note_F1=0.9677_pedal_F1=0.9186.pth"
+CHECKPOINT_FILENAME = "piano-medium-double-1.0.safetensors"
 CHECKPOINT_DIR = "/checkpoints"
 CHECKPOINT_URL = (
-    "https://zenodo.org/record/4034264/files/"
-    "CRNN_note_F1%3D0.9677_pedal_F1%3D0.9186.pth?download=1"
+    "https://huggingface.co/datasets/loubb/aria-midi/resolve/main/"
+    "piano-medium-double-1.0.safetensors?download=true"
 )
 
 image = modal.Image.debian_slim(python_version="3.11").pip_install("requests")
