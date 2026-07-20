@@ -35,7 +35,8 @@ Header: X-API-Key: <shared secret>
   "audio_base64": "<base64 audio bytes>",
   "quantize": true,
   "tempo_hint": 72,
-  "time_signature": "3/4"
+  "time_signature": "3/4",
+  "separate_piano": false
 }
 
 200 OK
@@ -119,6 +120,13 @@ ragtime/march downbeat phase when downbeat tracking is unreliable.
 software. Set `false` to keep raw performance timing in the MIDI. The `notes`
 array is always raw timing regardless. Time signature is assumed 4/4; tempo is
 detected per request.
+
+`separate_piano` (optional, default `false`): run source separation
+(Spleeter, 5-stem) before transcription to isolate the piano part from a
+recording that also has vocals/drums/other instruments. Adds real latency
+(a second model runs first) and separation isn't perfect — bleed/artifacts
+from imperfect isolation can affect transcription quality, so leave this
+off for already-clean solo piano audio.
 
 One shared API key, set as a Modal Secret. The Papiano backend holds the
 same key and calls this endpoint server-to-server; per-user access, auth,

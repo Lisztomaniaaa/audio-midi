@@ -34,6 +34,32 @@ image = (
     )
 )
 
+# Piano-stem separation (Spleeter, Deezer — MIT code + MIT weights, trained
+# on Deezer's own internal data, not MUSDB18, so no NC taint from that
+# dataset). Kept in its own image: Spleeter needs TensorFlow, which conflicts
+# with the main image's PyTorch/numpy pins, so it runs as a separate Modal
+# class rather than sharing a container with PianoTranscriber.
+SEPARATOR_SAMPLE_RATE = 44100
+separator_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .apt_install("ffmpeg")
+    .pip_install(
+        "spleeter==2.4.2",
+        "tensorflow==2.12.1",
+        "librosa",
+        "soundfile",
+    )
+    .env({"MODEL_PATH": "/spleeter_models"})
+    # Force the 5stems checkpoint to download during the image build (not on
+    # first request) by running a real separation on a dummy waveform.
+    .run_commands(
+        "python -c \""
+        "import numpy as np; from spleeter.separator import Separator; "
+        "s = Separator('spleeter:5stems'); "
+        "s.separate(np.zeros((44100, 2), dtype=np.float32))\""
+    )
+)
+
 app = modal.App("papiano-transcribe", image=image)
 
 checkpoint_volume = modal.Volume.from_name(
@@ -903,6 +929,55 @@ def _build_midi(notes, pedals, bpm, beats, downbeats, bpb, quantize, gliss_indic
 
 
 @app.cls(
+    image=separator_image,
+    cpu=4,
+    scaledown_window=120,
+    timeout=300,
+)
+class PianoSeparator:
+    """Isolates the piano stem from a mixed recording (piano + vocals/drums/
+    other instruments) before transcription. Optional — callers with clean
+    solo-piano audio should skip this entirely (separation adds latency and
+    its own artifacts)."""
+
+    @modal.enter()
+    def load(self):
+        import numpy as np
+        from spleeter.separator import Separator
+
+        self.separator = Separator("spleeter:5stems")
+        # Model loading is lazy on first .separate() call otherwise — warm it
+        # up here so it doesn't happen on the request path.
+        self.separator.separate(np.zeros((SEPARATOR_SAMPLE_RATE, 2), dtype=np.float32))
+
+    @modal.method()
+    def separate_piano(self, audio_b64: str) -> str:
+        import io
+        import tempfile
+
+        import numpy as np
+        import soundfile as sf
+        import librosa
+
+        audio_bytes = base64.b64decode(audio_b64)
+        with tempfile.NamedTemporaryFile(suffix=".audio") as tmp:
+            tmp.write(audio_bytes)
+            tmp.flush()
+            y, _ = librosa.load(tmp.name, sr=SEPARATOR_SAMPLE_RATE, mono=False)
+
+        # Spleeter wants (samples, channels); librosa gives (channels,
+        # samples) for stereo, or a flat 1-D array for mono source audio.
+        waveform = np.stack([y, y], axis=-1) if y.ndim == 1 else y.T
+
+        prediction = self.separator.separate(waveform)
+        piano = prediction["piano"].mean(axis=-1)  # stereo -> mono
+
+        buf = io.BytesIO()
+        sf.write(buf, piano, SEPARATOR_SAMPLE_RATE, format="WAV")
+        return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
+@app.cls(
     gpu="T4",
     scaledown_window=120,
     timeout=600,
@@ -1106,6 +1181,9 @@ def web():
         quantize = bool(item.get("quantize", True))
         tempo_hint = item.get("tempo_hint")
         time_signature = item.get("time_signature")
+        if item.get("separate_piano"):
+            separator = PianoSeparator()
+            audio_b64 = separator.separate_piano.remote(audio_b64)
         transcriber = PianoTranscriber()
         return transcriber.transcribe.remote(
             audio_b64, quantize, tempo_hint, time_signature
