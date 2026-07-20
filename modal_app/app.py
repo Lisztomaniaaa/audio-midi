@@ -85,6 +85,68 @@ GRID_SUBDIVISIONS = 4  # default subdivisions per beat (1/16-note grid)
 GRID_CANDIDATES = (3, 4, 6, 8, 12)
 DEFAULT_BPM = 120.0
 
+# Audio quality heuristics: flag input likely to degrade transcription
+# (clipping, noisy/low-SNR recordings, low-bitrate-MP3-style bandwidth
+# cutoffs) so the caller can warn the user instead of silently returning a
+# best-effort transcription. Thresholds are rough first guesses, not tuned
+# against a labeled "bad audio" eval set.
+CLIP_RATIO_THRESHOLD = 0.001  # fraction of samples pinned near full scale
+MIN_SNR_DB = 20.0
+MIN_BANDWIDTH_HZ = 11000
+
+
+def _assess_audio_quality(y, sr: int) -> dict:
+    import numpy as np
+
+    issues = []
+
+    clip_ratio = float(np.mean(np.abs(y) >= 0.99))
+    if clip_ratio > CLIP_RATIO_THRESHOLD:
+        issues.append("clipping")
+
+    # Crude SNR: 90th vs 10th percentile of per-frame RMS, in dB. Quiet
+    # frames approximate the noise floor, loud frames approximate the
+    # signal — not a real noise-spectrum estimate, just a cheap proxy.
+    frame_len = int(sr * 0.03)
+    snr_db = None
+    if frame_len > 0 and len(y) >= frame_len * 4:
+        n_frames = len(y) // frame_len
+        frames = y[: n_frames * frame_len].reshape(n_frames, frame_len)
+        rms = np.sqrt(np.mean(frames**2, axis=1))
+        rms = rms[rms > 0]
+        if rms.size >= 4:
+            noise_floor = np.percentile(rms, 10)
+            signal_level = np.percentile(rms, 90)
+            if noise_floor > 0:
+                snr_db = float(20 * np.log10(signal_level / noise_floor))
+    if snr_db is not None and snr_db < MIN_SNR_DB:
+        issues.append("low_snr")
+
+    # Effective bandwidth: highest frequency still carrying >1% of peak
+    # magnitude, averaged over fixed-size FFT frames. Low-bitrate MP3s and
+    # phone recordings roll off well below the source's nominal sample rate.
+    n_fft = 4096
+    bandwidth_hz = None
+    if len(y) >= n_fft:
+        n_frames = len(y) // n_fft
+        frames = y[: n_frames * n_fft].reshape(n_frames, n_fft)
+        spec = np.abs(np.fft.rfft(frames, axis=1)).mean(axis=0)
+        freqs = np.fft.rfftfreq(n_fft, d=1.0 / sr)
+        peak = spec.max()
+        if peak > 0:
+            above = freqs[spec > peak * 0.01]
+            bandwidth_hz = float(above.max()) if above.size else 0.0
+    if bandwidth_hz is not None and bandwidth_hz < MIN_BANDWIDTH_HZ:
+        issues.append("narrow_bandwidth")
+
+    return {
+        "level": "low" if issues else "good",
+        "issues": issues,
+        "snr_db": round(snr_db, 1) if snr_db is not None else None,
+        "bandwidth_hz": round(bandwidth_hz) if bandwidth_hz is not None else None,
+        "clipping_ratio": round(clip_ratio, 4),
+    }
+
 
 def _refine_note_offsets(y, notes: list) -> list:
     import librosa
@@ -896,12 +958,21 @@ class PianoTranscriber:
         logger = logging.getLogger(__name__)
         audio_bytes = base64.b64decode(audio_b64)
 
-        # Load the source audio once — feeds the model directly, plus the
-        # offset refinement and tempo/beat detection below.
+        # Load the source audio once at its native rate — quality assessment
+        # needs the real bandwidth (resampling to 16kHz would hide a source
+        # that's already band-limited below 8kHz), then resample down for
+        # the model, offset refinement, and tempo/beat detection below.
         with tempfile.NamedTemporaryFile(suffix=".audio") as tmp_audio:
             tmp_audio.write(audio_bytes)
             tmp_audio.flush()
-            y, _ = librosa.load(tmp_audio.name, sr=SAMPLE_RATE, mono=True)
+            y_native, native_sr = librosa.load(tmp_audio.name, sr=None, mono=True)
+
+        audio_quality = _assess_audio_quality(y_native, native_sr)
+        y = (
+            librosa.resample(y_native, orig_sr=native_sr, target_sr=SAMPLE_RATE)
+            if native_sr != SAMPLE_RATE
+            else y_native
+        )
 
         transcribed = self.transcriptor.transcribe(y, None)
 
@@ -996,6 +1067,7 @@ class PianoTranscriber:
             "time_signature": f"{bpb}/4",
             "key": key_name,
             "chords": chords,
+            "audio_quality": audio_quality,
             "glissandos": glissandos,
             "structure": structure,
             "debug": {

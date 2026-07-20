@@ -3,20 +3,22 @@
 Two distinct problems: detecting that input audio is low-quality, and
 actually transcribing it better anyway.
 
-## Detection (short-term, tractable)
+## Detection — done
 
-Add an audio-quality check before/alongside transcription and surface it in
-the API response (e.g. `"audio_quality": "low"` + a reason), so Papiano can
-warn the user or suggest a better recording instead of silently returning a
-bad transcription. Candidate signals:
+Shipped in `modal_app/app.py` (`_assess_audio_quality`): returns
+`audio_quality` in the API response with `level` (`good`/`low`), `issues`
+(`clipping`, `low_snr`, `narrow_bandwidth`), plus raw `snr_db`,
+`bandwidth_hz`, `clipping_ratio`. Doesn't block the response — best-effort
+transcription still runs, this is a signal for the caller.
 
-- Estimated SNR / noise floor
-- Clipping (samples pinned at ±1.0)
-- Effective bandwidth (low-bitrate MP3s cut high frequencies)
-- Sample rate / mono-downmix artifacts
-
-This is a heuristic-engineering task, not a training task — could ship
-independently of the model-robustness work below.
+Known limitation, found during testing: the SNR heuristic (90th vs 10th
+percentile frame RMS) assumes quiet passages exist to sample a noise floor
+from. A continuously loud, non-decaying signal (e.g. sustain pedal held
+throughout, or a synthetic sustained tone) has no quiet frames and can read
+as false-positive `low_snr` even when actually clean. Real piano recordings
+almost always have natural decay/silence between phrases, so this should be
+rare in practice, but it's not rigorously validated against real "bad
+audio" samples yet — thresholds are first guesses.
 
 ## Robustness (needs training)
 

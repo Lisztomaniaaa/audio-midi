@@ -46,10 +46,18 @@ Header: X-API-Key: <shared secret>
   "time_signature": "4/4",
   "key": "Db major",
   "chords": [{ "bar": 0, "symbol": "Db" }, { "bar": 5, "symbol": "Bbm7" }],
+  "audio_quality": { "level": "good", "issues": [], "snr_db": 28.4, "bandwidth_hz": 15200, "clipping_ratio": 0.0 },
   "midi_base64": "...",
   "musicxml": "<?xml ...>"
 }
 ```
+
+`audio_quality`: heuristic read on the source recording — `level` is `"good"`
+or `"low"`; `issues` lists which checks failed (`clipping`, `low_snr`,
+`narrow_bandwidth`). Doesn't block the response — transcription still runs
+and returns best-effort, this is a signal for the caller to warn the user
+or suggest a better recording. Thresholds are first-guess heuristics, not
+tuned against a labeled eval set yet.
 
 `pitch`: MIDI note number. `onset`/`offset`: seconds, raw performance timing
 synced to the audio. `tempo`: detected BPM. `key`: detected key signature.
