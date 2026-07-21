@@ -155,6 +155,24 @@ not the HTTP API key). Add `--separate-piano` to score the
 separate-then-transcribe path (goal 3) instead of transcribing the mixed
 audio directly.
 
+**Only have a MIDI, no matching recording?** Render one with FluidSynth so
+alignment is exact by construction (the audio comes directly from the
+MIDI's own notes, so there's no risk of scoring against a different
+performance/tempo by mistake — see the note below):
+
+```bash
+apt-get install --no-install-recommends fluid-soundfont-gm  # or any GM soundfont
+python scripts/render_midi_audio.py --midi song.mid --out song.wav
+python scripts/eval_transcription.py --audio song.wav --reference-midi song.mid
+```
+
+Before trusting a score against a *real* recording, sanity-check that the
+audio and MIDI actually are the same performance — a generic MIDI transcript
+paired with someone else's recording of the same piece can differ in overall
+duration by tens of seconds (different tempo/interpretation), which tanks
+every metric and looks exactly like a transcription failure. Compare
+`mido.MidiFile(path).length` against the audio's duration first.
+
 ## Retraining
 
 Write the new checkpoint into the `papiano-transcribe-checkpoints` volume and

@@ -75,14 +75,35 @@ less-pedaled audio that the current 0.20 default may already suit
 reasonably. Needs a small eval set spanning easy *and* hard cases before
 committing to a new default — not a decision to make from n=1.
 
-**Bigger picture**: the onset+pitch ceiling (0.034) landing this low, on a
-piece specifically chosen to stress dense/legato/pedaled playing, lines up
-with the Aria-AMT vs current-model architecture discussion — a CRNN
-per-frame regression model (current) genuinely struggles with this kind of
-material in a way a joint-sequence transformer (Aria-AMT's approach) is
-architecturally better suited to. Threshold tuning has a real but limited
-ceiling here; the durable fix is the retrain-on-clean-data path in
-`01-genre-coverage.md`, not further parameter search on the current model.
+**⚠️ Correction — the 0.034 above was measuring a data mismatch, not (mainly)
+model quality.** `mido.MidiFile(...).length` on the reference MIDI is 125.8s;
+the MP3 is 172.0s — a 37% duration difference, meaning the MIDI and MP3 are
+different performances/tempos of the same piece, not an aligned pair. To
+check, we rendered audio directly from the reference MIDI itself (FluidSynth
++ a GM soundfont — exact alignment by construction, see
+`scripts/render_midi_audio.py`) and re-scored against that:
+
+|                          | vs. mismatched MP3 | vs. MIDI-rendered audio (aligned) |
+|--------------------------|---------------------|-------------------------------------|
+| Onset+pitch F1           | 0.034               | **0.339**                            |
+| Onset+pitch+offset F1    | 0.0076              | **0.240**                            |
+
+~10x better once the comparison is actually fair. The model is meaningfully
+better than the first pass suggested — this piece is still hard (0.34 isn't
+great), but it's not the near-total failure the mismatched comparison
+implied. **Lesson: verify audio/MIDI duration match before trusting any
+score from a pair someone provides** — a plausible-looking pair can silently
+be two different performances.
+
+**Bigger picture, revised**: real transcription quality on this hard piece
+is ~0.34 onset+pitch F1, not 0.034 — worse than the field's reported
+MAESTRO benchmarks (~0.97) as expected for a fast/wide-register/heavily-
+pedaled piece, but not evidence of a severe architectural ceiling on its
+own. The Aria-AMT (seq2seq) vs current-model (CRNN) architecture gap
+discussed elsewhere may still matter for this kind of material, but this
+particular data point no longer supports as strong a claim as first
+thought — needs a properly aligned eval set (multiple pieces) before
+drawing that conclusion with confidence.
 
 ## Open questions
 
