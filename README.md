@@ -138,6 +138,23 @@ and limits are Papiano's responsibility, not this service's.
 python scripts/test_endpoint.py --url <base url>/transcribe --audio song.wav --out output.mid --key <api-key>
 ```
 
+### Accuracy evaluation
+
+Given an audio file and a ground-truth MIDI for the *same, time-aligned*
+performance, score the deployed transcriber with standard AMT metrics
+(`mir_eval`, the same metric family used in the field's benchmarks/papers —
+onset F1, onset+offset F1, onset+offset+velocity F1):
+
+```bash
+pip install mir_eval mido
+python scripts/eval_transcription.py --audio song.mp3 --reference-midi song.mid
+```
+
+Calls the Modal app directly (needs `modal token set` for this workspace,
+not the HTTP API key). Add `--separate-piano` to score the
+separate-then-transcribe path (goal 3) instead of transcribing the mixed
+audio directly.
+
 ## Retraining
 
 Write the new checkpoint into the `papiano-transcribe-checkpoints` volume and
