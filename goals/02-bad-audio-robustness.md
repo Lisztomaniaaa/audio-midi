@@ -105,10 +105,62 @@ particular data point no longer supports as strong a claim as first
 thought — needs a properly aligned eval set (multiple pieces) before
 drawing that conclusion with confidence.
 
+## Second ground-truth result (jazz piece, MIDI rendered to audio ourselves)
+
+Tested against a user-provided MIDI ("Ballad of the Jazz Cafe", trimmed to
+60s), rendered to audio via `scripts/render_midi_audio.py` — exact alignment
+by construction, so this result isn't confounded by the mismatch problem
+above. Two concrete, user-reported issues investigated and fixed:
+
+**"Ghost" false-positive notes.** The earlier `onset_threshold=0.15` (goal:
+better bad-audio recall) was tested here on *clean* synthesized audio: 18
+false-positive notes out of 331 detected. Swept the threshold back up:
+
+| onset_threshold | false positives | recall |
+|---|---|---|
+| 0.15 (was deployed) | 18 | 0.969 |
+| 0.20 | 11 | 0.963 |
+| 0.25 | 10 | 0.960 |
+| **0.30 (library default)** | **6** | **0.960** |
+
+0.30 cuts false positives 3x for under 1% recall cost — reverted both
+`ONSET_THRESHOLD` and `FRAME_THRESHOLD` to the library's own defaults; the
+earlier lowering was never validated against real audio and turned out to
+be a bad trade on typical (non-degraded) input.
+
+**Unnaturally long notes.** Manually confirmed several of the worst-overshoot
+notes had *no sustain pedal active* at all — that pitch's CQT energy was
+bleed from a different overlapping note/harmonic, not this note's own decay,
+and `_refine_note_offsets`'s decay search is bounded by the model's own
+(already too-long) predicted offset, so it had no way to catch this. Added
+`MAX_NOTE_DURATION_NO_PEDAL_S` (1.0s) and a looser `MAX_NOTE_DURATION_PEDAL_S`
+(2.0s) as hard ceilings, using the pedal on/off track we already compute.
+Explicitly **not** tuned to match this file's reference durations exactly —
+per direct user instruction, the target is a plausible/humanlike duration,
+not literal ground truth (a real MIDI can itself encode a duration no human
+pianist would produce).
+
+Result on this file:
+
+|                          | before | after |
+|--------------------------|--------|-------|
+| Onset+pitch F1           | 0.957  | **0.970** (precision 0.946→0.981) |
+| Onset+pitch+offset F1    | 0.291  | **0.341** |
+| Median duration error    | +62ms  | **+48ms** |
+| p95 duration error       | +494ms | **+444ms** |
+
+Residual large-error tail is now specifically in pedal-*active* cases (worst
+still ~1.8s vs a 0.7s reference) — deliberately left alone rather than
+tightening `MAX_NOTE_DURATION_PEDAL_S` further, since that risks clipping
+genuinely long pedaled notes and we only have this one file's evidence.
+
 ## Open questions
 
 - Need more aligned audio+MIDI pairs (easy AND hard cases) before touching
-  any global threshold default again — one adversarial sample isn't enough
-  to safely retune production.
+  any global threshold default again — two adversarial samples isn't enough
+  to safely retune production, and both fixes so far are validated on jazz/
+  classical only.
+- Is `MAX_NOTE_DURATION_PEDAL_S=2.0` actually the right ceiling, or should it
+  vary by tempo/register? Needs more pedal-heavy examples to know.
 - Should degraded-audio detection gate the response (warn + still return
   best-effort) or block it (refuse to transcribe below some quality floor)?

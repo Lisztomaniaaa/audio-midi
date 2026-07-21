@@ -69,18 +69,40 @@ checkpoint_volume = modal.Volume.from_name(
 api_key_secret = modal.Secret.from_name("papiano-api-key")
 
 SAMPLE_RATE = 16000
-# piano_transcription_inference's own defaults (onset=0.3, frame=0.1) are
-# tuned for clean studio recordings (its MAESTRO training data). Lowered here
-# so weaker onsets in noisy/low-quality source audio still clear the bar,
-# trading some false positives for fewer missed notes.
-ONSET_THRESHOLD = 0.15
-FRAME_THRESHOLD = 0.05
+# piano_transcription_inference's own defaults are onset=0.3, frame=0.1.
+# Both were lowered earlier for unvalidated "bad audio recall" reasons.
+# Measured on a clean ground-truth test (rendered audio + reference MIDI,
+# scripts/eval_transcription.py): lowering onset_threshold to 0.15 tripled
+# false-positive "ghost" notes (18 vs 6 out of ~320) for under 1% extra
+# recall — a bad trade on typical audio. Reverted both to the library
+# defaults; revisit only with real evidence (a labeled bad-audio eval set),
+# not a guess.
+ONSET_THRESHOLD = 0.30
+FRAME_THRESHOLD = 0.10
 # Note-off prediction is the noisiest part of AMT models generally, and tends
 # to err toward predicting notes longer than they actually sound, especially
 # in pedal-heavy passages where other notes' resonance bleeds into the audio.
 # This refines each predicted offset against the actual per-pitch decay in
 # the source audio, so it only ever shortens a note, never lengthens one.
 MIN_NOTE_DURATION_S = 0.05
+# Found via ground-truth testing (scripts/eval_transcription.py): without the
+# sustain pedal down, some notes' predicted offsets ran 0.6-1.1s longer than
+# truth (that pitch's CQT energy was bleed from an overlapping note/harmonic,
+# not this note's own decay, so the search above never found a decay point).
+# There's no acoustic justification for an unpedaled note to ring this long,
+# so cap it as a hard ceiling. Deliberately generous, not tuned to match any
+# reference recording's exact durations — the target is a plausible/humanlike
+# duration, not literal ground truth (a real MIDI can itself encode durations
+# no human pianist actually produced).
+MAX_NOTE_DURATION_NO_PEDAL_S = 1.0
+# Even with the pedal down, testing still showed single notes stretched to
+# 1.5-1.8s (2-3x the note's actual written length) where the decay search
+# found no drop because pedal resonance genuinely doesn't decay quickly.
+# A single piano note read as multiple seconds long is implausible in almost
+# any real playing (the pedal's own separate onset/offset already carries
+# that atmosphere) - a looser but still finite ceiling than the no-pedal
+# case, as a safety net rather than a precisely tuned value.
+MAX_NOTE_DURATION_PEDAL_S = 2.0
 DECAY_THRESHOLD_RATIO = 0.20
 
 # Hand "humanizer": within one hand the fingers can't keep holding a note once
@@ -174,7 +196,12 @@ def _assess_audio_quality(y, sr: int) -> dict:
     }
 
 
-def _refine_note_offsets(y, notes: list) -> list:
+def _pedal_active_during(pedals, t0, t1):
+    """True if the sustain pedal overlaps [t0, t1] at all."""
+    return any(p["onset"] < t1 and p["offset"] > t0 for p in pedals)
+
+
+def _refine_note_offsets(y, notes: list, pedals: list = ()) -> list:
     import librosa
     import numpy as np
 
@@ -197,32 +224,39 @@ def _refine_note_offsets(y, notes: list) -> list:
 
     refined = []
     for note in notes:
+        new_offset = note["offset"]  # fallback: the model's own raw offset
+
         bin_idx = note["pitch"] - 21
         onset_idx = int(np.searchsorted(frame_times, note["onset"]))
         offset_idx = int(np.searchsorted(frame_times, note["offset"]))
         offset_idx = min(offset_idx, cqt.shape[1] - 1)
 
-        if not (0 <= bin_idx < 88) or offset_idx <= onset_idx:
-            refined.append(note)
-            continue
+        if 0 <= bin_idx < 88 and offset_idx > onset_idx:
+            segment = cqt[bin_idx, onset_idx : offset_idx + 1]
+            peak = segment.max()
+            if peak > 0:
+                threshold = peak * DECAY_THRESHOLD_RATIO
+                peak_idx = int(segment.argmax())
+                decay_idx = next(
+                    (i for i in range(peak_idx, len(segment)) if segment[i] < threshold),
+                    None,
+                )
+                if decay_idx is not None:
+                    new_offset = float(frame_times[onset_idx + decay_idx])
 
-        segment = cqt[bin_idx, onset_idx : offset_idx + 1]
-        peak = segment.max()
-        if peak <= 0:
-            refined.append(note)
-            continue
+        # The CQT search above is bounded by the model's own predicted
+        # offset, so it can only ever shorten within that window — it can't
+        # catch cases where the model's raw offset is itself far too long
+        # (typically: this pitch's energy is actually bleed from an
+        # overlapping note/harmonic, not this note's own sustain). Without
+        # the sustain pedal, there's no acoustic reason for a note to ring on
+        # that long, so cap it as a hard safety net regardless of what the
+        # decay search found.
+        if _pedal_active_during(pedals, note["onset"], new_offset):
+            new_offset = min(new_offset, note["onset"] + MAX_NOTE_DURATION_PEDAL_S)
+        else:
+            new_offset = min(new_offset, note["onset"] + MAX_NOTE_DURATION_NO_PEDAL_S)
 
-        threshold = peak * DECAY_THRESHOLD_RATIO
-        peak_idx = int(segment.argmax())
-        decay_idx = next(
-            (i for i in range(peak_idx, len(segment)) if segment[i] < threshold),
-            None,
-        )
-        if decay_idx is None:
-            refined.append(note)
-            continue
-
-        new_offset = float(frame_times[onset_idx + decay_idx])
         new_offset = max(new_offset, note["onset"] + MIN_NOTE_DURATION_S)
         new_offset = min(new_offset, note["offset"])
         refined.append({**note, "offset": round(new_offset, 3)})
@@ -1065,7 +1099,7 @@ class PianoTranscriber:
             for ev in transcribed["est_pedal_events"]
         ]
 
-        notes = _refine_note_offsets(y, notes)
+        notes = _refine_note_offsets(y, notes, pedals)
         gliss_runs = _glissando_runs(notes)
         glissandos = _glissando_summary(notes, gliss_runs)
         voices = _separate_voices(notes)
@@ -1157,7 +1191,12 @@ class PianoTranscriber:
         }
 
     @modal.method()
-    def debug_raw(self, audio_b64: str) -> dict:
+    def debug_raw(
+        self,
+        audio_b64: str,
+        onset_threshold: float = None,
+        frame_threshold: float = None,
+    ) -> dict:
         """Raw model output (no offset refinement/humanizer) plus the
         resampled audio, for local parameter-tuning against a ground-truth
         MIDI (see scripts/eval_transcription.py). Not exposed over the
@@ -1166,6 +1205,13 @@ class PianoTranscriber:
 
         import librosa
 
+        orig_onset = self.transcriptor.onset_threshold
+        orig_frame = self.transcriptor.frame_threshold
+        if onset_threshold is not None:
+            self.transcriptor.onset_threshold = onset_threshold
+        if frame_threshold is not None:
+            self.transcriptor.frame_threshold = frame_threshold
+
         audio_bytes = base64.b64decode(audio_b64)
         with tempfile.NamedTemporaryFile(suffix=".audio") as tmp_audio:
             tmp_audio.write(audio_bytes)
@@ -1173,6 +1219,8 @@ class PianoTranscriber:
             y, _ = librosa.load(tmp_audio.name, sr=SAMPLE_RATE, mono=True)
 
         transcribed = self.transcriptor.transcribe(y, None)
+        self.transcriptor.onset_threshold = orig_onset
+        self.transcriptor.frame_threshold = orig_frame
         notes = [
             {
                 "pitch": int(ev["midi_note"]),
