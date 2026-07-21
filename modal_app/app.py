@@ -1156,6 +1156,34 @@ class PianoTranscriber:
             "musicxml": musicxml,
         }
 
+    @modal.method()
+    def debug_raw(self, audio_b64: str) -> dict:
+        """Raw model output (no offset refinement/humanizer) plus the
+        resampled audio, for local parameter-tuning against a ground-truth
+        MIDI (see scripts/eval_transcription.py). Not exposed over the
+        public HTTP API — call via the Modal SDK directly."""
+        import tempfile
+
+        import librosa
+
+        audio_bytes = base64.b64decode(audio_b64)
+        with tempfile.NamedTemporaryFile(suffix=".audio") as tmp_audio:
+            tmp_audio.write(audio_bytes)
+            tmp_audio.flush()
+            y, _ = librosa.load(tmp_audio.name, sr=SAMPLE_RATE, mono=True)
+
+        transcribed = self.transcriptor.transcribe(y, None)
+        notes = [
+            {
+                "pitch": int(ev["midi_note"]),
+                "onset": float(ev["onset_time"]),
+                "offset": float(ev["offset_time"]),
+                "velocity": int(ev["velocity"]),
+            }
+            for ev in transcribed["est_note_events"]
+        ]
+        return {"notes": notes, "audio": y.tolist()}
+
 
 @app.function(secrets=[api_key_secret])
 @modal.asgi_app()

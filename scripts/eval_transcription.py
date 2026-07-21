@@ -90,19 +90,20 @@ def main() -> None:
     print(f"Audio quality flags: {result['audio_quality']}")
     print()
 
-    onset_scores = mir_eval.transcription.evaluate(
-        ref_intervals, ref_pitches, est_intervals, est_pitches, offset_ratio=None
-    )
-    print("Onset-only (is the note there, at roughly the right time + pitch):")
-    for k in ("Onset_Precision", "Onset_Recall", "Onset_F-measure"):
-        print(f"  {k}: {onset_scores[k]:.3f}")
+    scores = mir_eval.transcription.evaluate(ref_intervals, ref_pitches, est_intervals, est_pitches)
 
-    onset_offset_scores = mir_eval.transcription.evaluate(
-        ref_intervals, ref_pitches, est_intervals, est_pitches
-    )
-    print("\nOnset+offset (also: is the note's duration roughly right):")
+    # NB: mir_eval's "Onset_*" keys (onset_precision_recall_f1) match on time
+    # ONLY, ignoring pitch entirely - not a meaningful transcription-accuracy
+    # number (a dense polyphonic passage can score deceptively high there
+    # just from onset density). "*_no_offset" is the one that requires both
+    # onset AND pitch to match, which is what "is this note right" means.
+    print("Onset+pitch, ignoring duration (is this the right note, roughly the right time):")
+    for k in ("Precision_no_offset", "Recall_no_offset", "F-measure_no_offset"):
+        print(f"  {k}: {scores[k]:.3f}")
+
+    print("\nOnset+pitch+offset (also: is the note's duration roughly right):")
     for k in ("Precision", "Recall", "F-measure"):
-        print(f"  {k}: {onset_offset_scores[k]:.3f}")
+        print(f"  {k}: {scores[k]:.4f}")
 
     velocity_scores = mir_eval.transcription_velocity.evaluate(
         ref_intervals, ref_pitches, ref_velocities, est_intervals, est_pitches, est_velocities

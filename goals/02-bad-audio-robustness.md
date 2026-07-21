@@ -41,9 +41,53 @@ augmentation on this exact model). Two levers:
    corpus first (e.g. synthetic audio rendered from public-domain/licensed
    MIDI), same constraint as goal 1.
 
+## First real ground-truth result (Chopin Étude Op. 25 No. 1, "Aeolian Harp")
+
+Scored against an aligned MP3+MIDI pair the user provided (chosen
+deliberately for its heavy, continuous sustain pedal — a worst-case stress
+test). Using `scripts/eval_transcription.py` against the currently deployed
+model:
+
+- **Onset+pitch correct** (is this the right note, roughly the right time,
+  ignoring duration): F1 = **0.034**. Low — this piece's fast, wide-register
+  arpeggios are genuinely hard for the current model, not just a duration
+  problem. Manual inspection of a 1-second window confirmed real pitch
+  errors, not just an eval bug (though we did find and fix one — see below).
+- **Onset+pitch+offset correct** (also duration): F1 = 0.0076 at the
+  deployed `DECAY_THRESHOLD_RATIO=0.20`.
+
+**Found and fixed a real bug in the eval script**: `mir_eval`'s
+`Onset_Precision/Recall/F-measure` keys match on time only, ignoring pitch
+entirely — a first pass reported these as "onset accuracy" and got 0.63,
+which is meaningless for judging transcription quality (a dense polyphonic
+piece scores deceptively high there just from onset density). The
+pitch-aware numbers above (`*_no_offset` keys) are what actually matters,
+and are far lower. Fixed in the script; don't trust the plain `Onset_*` keys
+for anything user-facing.
+
+**Explored, not shipped**: swept `DECAY_THRESHOLD_RATIO` from 0.20 up to
+0.99 against this one file — 0.85 roughly triples the onset+pitch+offset F1
+(0.0076 → 0.022) and brings median note duration much closer to the
+reference (0.18s → ~0.05s vs reference's ~0.10s). **Deliberately not
+deployed as the new default**: this is one deliberately-adversarial piece;
+retuning a global production parameter to it risks regressing normal,
+less-pedaled audio that the current 0.20 default may already suit
+reasonably. Needs a small eval set spanning easy *and* hard cases before
+committing to a new default — not a decision to make from n=1.
+
+**Bigger picture**: the onset+pitch ceiling (0.034) landing this low, on a
+piece specifically chosen to stress dense/legato/pedaled playing, lines up
+with the Aria-AMT vs current-model architecture discussion — a CRNN
+per-frame regression model (current) genuinely struggles with this kind of
+material in a way a joint-sequence transformer (Aria-AMT's approach) is
+architecturally better suited to. Threshold tuning has a real but limited
+ceiling here; the durable fix is the retrain-on-clean-data path in
+`01-genre-coverage.md`, not further parameter search on the current model.
+
 ## Open questions
 
-- What threshold value is the right default trade-off? Needs a labeled
-  "bad audio" eval set to tune against, not guessing.
+- Need more aligned audio+MIDI pairs (easy AND hard cases) before touching
+  any global threshold default again — one adversarial sample isn't enough
+  to safely retune production.
 - Should degraded-audio detection gate the response (warn + still return
   best-effort) or block it (refuse to transcribe below some quality floor)?
