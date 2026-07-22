@@ -123,10 +123,12 @@ detected per request.
 
 `separate_piano` (optional, default `false`): run source separation
 (Spleeter, 5-stem) before transcription to isolate the piano part from a
-recording that also has vocals/drums/other instruments. Adds real latency
-(a second model runs first) and separation isn't perfect — bleed/artifacts
-from imperfect isolation can affect transcription quality, so leave this
-off for already-clean solo piano audio.
+recording that also has vocals/drums/other instruments. **Not currently
+recommended** — a controlled test (see `goals/03-multi-instrument-
+arrangement.md`) measured this making transcription *worse*, not better
+(more spurious notes, not fewer), likely from separation artifacts
+confusing the transcriber more than the original mixed audio did. Left in
+the API as opt-in while this gets root-caused; leave it off.
 
 One shared API key, set as a Modal Secret. The Papiano backend holds the
 same key and calls this endpoint server-to-server; per-user access, auth,

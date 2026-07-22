@@ -5,7 +5,7 @@ vocals/drums/other instruments), then transcribe just that — not generating
 a piano arrangement for recordings that have no piano at all (that's a much
 harder generative-arrangement problem and explicitly out of scope for now).
 
-## Status: shipped (opt-in), quality not yet validated on real audio
+## Status: shipped (opt-in), but measured to make results WORSE — don't use yet
 
 Implemented in `modal_app/app.py` as `PianoSeparator`, a Modal class in its
 own image (Spleeter needs TensorFlow, which conflicts with the main
@@ -29,22 +29,43 @@ mistakes — checked code and checkpoint separately, from primary sources):
   checkpoint safe to use. Its 5-stem model has a dedicated `piano` output
   (vocals/drums/bass/piano/other) — Demucs's standard stems don't.
 
-**Not yet validated**: Spleeter's own paper doesn't publish an SDR number
-for the piano stem specifically — separation quality on real mixed
-recordings (bleed, artifacts) hasn't been measured, only smoke-tested for
-"does the pipeline run without crashing." Test on real multi-instrument
-piano recordings before relying on this in production.
+**Tested — negative result.** Built a synthetic multi-instrument test:
+took the jazz-ballad MIDI (piano-only reference), added a programmatic
+walking bass line + simple drum pattern on separate MIDI channels, rendered
+the full mix with FluidSynth, and compared transcribing it directly against
+transcribing after `separate_piano`:
+
+|                        | direct (mixed audio) | after separate_piano |
+|------------------------|----------------------|-----------------------|
+| Notes estimated (ref=323) | 389                | **505**               |
+| Onset+pitch F1         | 0.803                 | **0.662**              |
+
+Separation made it *worse*, not better — more spurious notes, not fewer.
+Bass and drums have spectral/rhythmic character different enough from piano
+that the transcriber already handles the raw mix reasonably (0.80 F1);
+Spleeter's separation artifacts (bleed, spectral holes, phasing) apparently
+confuse the transcriber more than the original bass/drums did. **Don't
+recommend using `separate_piano` until this is root-caused** — leaving it
+in the API as opt-in (so nothing currently using it breaks) but the finding
+here is: for now, transcribing the mixed audio directly is the better
+default, which is the opposite of what this goal set out to build.
+
+Possible next steps, not yet tried: check what the isolated piano stem
+actually sounds like/looks like spectrally (is Spleeter's separation itself
+bad, or is the transcriber unusually sensitive to its specific artifacts);
+try feeding the separated stem through the same audio-quality preprocessing
+other paths use; consider whether a different separation tool/approach
+would fare better, now that we have a concrete regression test to check
+any candidate against before adopting it.
 
 ## Open questions
 
+- Root cause the regression above before any further work here — is it
+  Spleeter's separation quality itself, or something in how the separated
+  stem interacts with the transcriber's own preprocessing?
 - Detection: right now `separate_piano` is caller-specified (Papiano decides
-  when to send it), not auto-detected. An automatic "does this need
-  separation" check would avoid the added latency/artifact risk on already-
-  clean solo piano audio, but needs its own instrument-detection step.
-- Quality: does separation-then-transcribe actually improve results over
-  just transcribing the mixed audio directly, or do Spleeter's artifacts
-  cancel out the gain? Needs a real before/after comparison on mixed
-  recordings, not assumed.
+  when to send it), not auto-detected. Moot until separation is shown to
+  actually help.
 - Cost/latency: this runs a second model (CPU-based TensorFlow inference)
   before the GPU transcription step — worth measuring actual added latency
-  under real load.
+  under real load, though moot if the feature isn't recommended for use.
