@@ -154,6 +154,18 @@ still ~1.8s vs a 0.7s reference) — deliberately left alone rather than
 tightening `MAX_NOTE_DURATION_PEDAL_S` further, since that risks clipping
 genuinely long pedaled notes and we only have this one file's evidence.
 
+**Regression check on the Chopin étude** (rendered from its own MIDI too, so
+now a second cleanly-aligned data point): scores essentially unchanged
+before/after these fixes (onset+pitch F1 0.339→0.338, onset+pitch+offset
+0.240→0.238). Expected and reassuring — this piece's notes are already short
+and fast (dense arpeggios), so the duration caps rarely trigger there; the
+fixes target a different failure mode (held/long notes) without regressing
+this one. The étude's low absolute score (~0.34) holding steady also
+reconfirms that piece's difficulty is a genuine onset/pitch-detection
+limitation (fast, wide-register arpeggios), not a duration/threshold
+artifact — consistent with the Aria-AMT (seq2seq) vs current-model (CRNN)
+architecture gap discussed elsewhere.
+
 ## Open questions
 
 - Need more aligned audio+MIDI pairs (easy AND hard cases) before touching
