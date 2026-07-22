@@ -166,6 +166,31 @@ limitation (fast, wide-register arpeggios), not a duration/threshold
 artifact — consistent with the Aria-AMT (seq2seq) vs current-model (CRNN)
 architecture gap discussed elsewhere.
 
+## Classical benchmark (10 pieces, `eval_data/classical_mutopia/`)
+
+Built a proper repeatable benchmark: 10 Chopin pieces (Études Op. 10 Nos.
+1/2/5/9/12, Op. 25 Nos. 1/2, Waltz Op. 64 No. 1, Ballades Nos. 1 and 4),
+sourced from Mutopia (CC-licensed, public-domain compositions — see that
+folder's README for the caveat that these are mechanically-exact engravings,
+not expressive performances, so don't over-index on these being harder/
+easier than real recordings). Run via `scripts/run_classical_benchmark.py`.
+
+| Metric (average across 10 pieces) | Score |
+|---|---|
+| Onset+pitch F1 | **0.958** |
+| Onset+pitch+offset F1 | 0.796 |
+| Onset+pitch+offset+velocity F1 | **0.603** |
+
+Onset/pitch detection is consistently strong (0.877-0.996 across all 10 —
+classical repertoire, unlike the earlier hard étude test, is comfortably in
+this model's wheelhouse when the reference is mechanically precise).
+Duration is decent (0.69-0.93). **Velocity is the standout weak point** and
+inconsistent — two pieces (Op. 10 No. 9: 0.277, Op. 25 No. 1: 0.412) score
+far below the rest (0.78-0.93) despite similar onset/duration accuracy. Not
+yet investigated why those two specifically — candidate hypothesis (untested):
+wide dynamic range or heavier pedal use obscuring the true attack velocity,
+but this needs actual investigation before acting on it.
+
 ## Open questions
 
 - Need more aligned audio+MIDI pairs (easy AND hard cases) before touching
@@ -174,5 +199,8 @@ architecture gap discussed elsewhere.
   classical only.
 - Is `MAX_NOTE_DURATION_PEDAL_S=2.0` actually the right ceiling, or should it
   vary by tempo/register? Needs more pedal-heavy examples to know.
+- **New**: why does velocity accuracy swing so hard between pieces (0.28 to
+  0.93) that otherwise score similarly on onset/duration? Worth root-causing
+  before touching anything — could be a real, fixable estimation issue.
 - Should degraded-audio detection gate the response (warn + still return
   best-effort) or block it (refuse to transcribe below some quality floor)?
