@@ -43,7 +43,9 @@ def score(ref_path, est_notes):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ft-checkpoint", default="note_pedal_ft_v1.pth")
+    parser.add_argument("--base-checkpoint", default=BASE)
     args = parser.parse_args()
+    base_ckpt = args.base_checkpoint
 
     transcribe_raw = modal.Function.from_name("papiano-eval-checkpoint", "transcribe_raw")
 
@@ -59,7 +61,7 @@ def main():
                 )
                 with open(wav_path, "rb") as f:
                     audio_b64 = base64.b64encode(f.read()).decode()
-                for ckpt_label, ckpt in [("base", BASE), ("ft", args.ft_checkpoint)]:
+                for ckpt_label, ckpt in [("base", base_ckpt), ("ft", args.ft_checkpoint)]:
                     est = transcribe_raw.remote(audio_b64, ckpt)
                     f1s = score(midi_path, est)
                     rows.append((piece, sf_name, ckpt_label, len(est), *f1s))
