@@ -53,7 +53,13 @@ data_volume = modal.Volume.from_name("papiano-finetune-data", create_if_missing=
     timeout=6 * 3600,
     volumes={CHECKPOINT_DIR: checkpoint_volume, DATA_DIR: data_volume},
 )
-def finetune(steps: int = 3000, batch_size: int = 8, lr: float = 1e-4, tag: str = "v1"):
+def finetune(
+    steps: int = 3000,
+    batch_size: int = 8,
+    lr: float = 1e-4,
+    tag: str = "v1",
+    start_checkpoint: str = BASE_CHECKPOINT,
+):
     import glob
     import os
     import random
@@ -121,7 +127,7 @@ def finetune(steps: int = 3000, batch_size: int = 8, lr: float = 1e-4, tag: str 
     # ---- Model ----
     model = Note_pedal(frames_per_second=FRAMES_PER_SECOND, classes_num=CLASSES_NUM)
     checkpoint = torch.load(
-        os.path.join(CHECKPOINT_DIR, BASE_CHECKPOINT), map_location="cpu"
+        os.path.join(CHECKPOINT_DIR, start_checkpoint), map_location="cpu"
     )
     model.load_state_dict(checkpoint["model"], strict=False)
     model.to(device).train()
@@ -187,5 +193,13 @@ def finetune(steps: int = 3000, batch_size: int = 8, lr: float = 1e-4, tag: str 
 
 
 @app.local_entrypoint()
-def main(steps: int = 3000, batch_size: int = 8, lr: float = 1e-4, tag: str = "v1"):
-    print(finetune.remote(steps=steps, batch_size=batch_size, lr=lr, tag=tag))
+def main(
+    steps: int = 3000,
+    batch_size: int = 8,
+    lr: float = 1e-4,
+    tag: str = "v1",
+    start_checkpoint: str = BASE_CHECKPOINT,
+):
+    print(finetune.remote(
+        steps=steps, batch_size=batch_size, lr=lr, tag=tag, start_checkpoint=start_checkpoint
+    ))
