@@ -121,6 +121,13 @@ CHORD_WINDOW_S = 0.05
 MAX_HAND_SPAN = 14  # semitones one hand can comfortably span (~a ninth)
 VOICE_MAX_JUMP = 16  # max pitch jump (semitones) to keep notes in one voice
 
+# Plausibility pruning: reject detections a human pianist couldn't physically
+# have produced, independent of whether they're "accurate" in some abstract
+# sense. Same idea as the duration caps above (pedal-aware, not ground-truth-
+# aware) — rule out the impossible rather than chase perfect matching.
+DUPLICATE_PITCH_WINDOW_S = 0.05  # one physical key can't re-strike faster than this
+MAX_SIMULTANEOUS_OCTAVES_SAME_CLASS = 2  # 2-hand octave doubling is common; 3+ is harmonic bleed, not a 3-octave unison
+
 # Glissando: a long, fast, one-directional, mostly-stepwise run.
 GLISS_MIN_NOTES = 6
 GLISS_MAX_IOI = 0.12  # seconds between consecutive notes (fast)
@@ -205,6 +212,69 @@ def _assess_audio_quality(y, sr: int) -> dict:
 def _pedal_active_during(pedals, t0, t1):
     """True if the sustain pedal overlaps [t0, t1] at all."""
     return any(p["onset"] < t1 and p["offset"] > t0 for p in pedals)
+
+
+def _prune_implausible_notes(notes: list) -> list:
+    """Drop detections a pianist couldn't physically have produced, rather
+    than trying to match ground truth more closely. Two patterns:
+
+    1. The exact same pitch struck twice within one keystroke's width — a
+       single key can't produce two independent onsets that close together,
+       so this is the model detecting one strike twice. Keep the louder one.
+    2. The same pitch class (e.g. all Cs) at 3+ octaves in the same onset
+       cluster. Doubling a note an octave apart between the two hands is
+       everyday piano writing; a *3-octave* unison from one strike essentially
+       never happens (this is the "C1+C2+C3 for one note" pattern) — it's
+       harmonic/overtone bleed being mistaken for separate notes. Keep the
+       loudest MAX_SIMULTANEOUS_OCTAVES_SAME_CLASS instances, drop the rest.
+    """
+    from collections import defaultdict
+
+    if not notes:
+        return notes
+
+    order = sorted(range(len(notes)), key=lambda i: notes[i]["onset"])
+    keep = [True] * len(notes)
+
+    # Rule 1: exact-duplicate pitch too close together to be a real re-strike.
+    by_pitch = defaultdict(list)
+    for i in order:
+        by_pitch[notes[i]["pitch"]].append(i)
+    for idxs in by_pitch.values():
+        last_kept = None
+        for i in idxs:  # already onset-sorted via `order`
+            if (
+                last_kept is not None
+                and notes[i]["onset"] - notes[last_kept]["onset"] < DUPLICATE_PITCH_WINDOW_S
+            ):
+                if notes[i]["velocity"] > notes[last_kept]["velocity"]:
+                    keep[last_kept] = False
+                    last_kept = i
+                else:
+                    keep[i] = False
+                continue
+            last_kept = i
+
+    # Rule 2: implausible same-pitch-class octave stacking within a cluster.
+    j = 0
+    while j < len(order):
+        t0 = notes[order[j]]["onset"]
+        c = j
+        while c < len(order) and notes[order[c]]["onset"] <= t0 + CHORD_WINDOW_S:
+            c += 1
+        cluster = [i for i in order[j:c] if keep[i]]
+
+        by_class = defaultdict(list)
+        for i in cluster:
+            by_class[notes[i]["pitch"] % 12].append(i)
+        for idxs in by_class.values():
+            if len({notes[i]["pitch"] // 12 for i in idxs}) > MAX_SIMULTANEOUS_OCTAVES_SAME_CLASS:
+                ranked = sorted(idxs, key=lambda i: -notes[i]["velocity"])
+                for i in ranked[MAX_SIMULTANEOUS_OCTAVES_SAME_CLASS:]:
+                    keep[i] = False
+        j = c
+
+    return [n for i, n in enumerate(notes) if keep[i]]
 
 
 def _refine_note_offsets(y, notes: list, pedals: list = ()) -> list:
@@ -1105,6 +1175,7 @@ class PianoTranscriber:
             for ev in transcribed["est_pedal_events"]
         ]
 
+        notes = _prune_implausible_notes(notes)
         notes = _refine_note_offsets(y, notes, pedals)
         gliss_runs = _glissando_runs(notes)
         glissandos = _glissando_summary(notes, gliss_runs)
