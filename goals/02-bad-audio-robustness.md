@@ -191,6 +191,38 @@ yet investigated why those two specifically — candidate hypothesis (untested):
 wide dynamic range or heavier pedal use obscuring the true attack velocity,
 but this needs actual investigation before acting on it.
 
+## Fine-tuned checkpoint deployed (note_pedal_ft_v1)
+
+The user's core complaint — hallucinated/dropped notes on fast passages,
+heavy sustain, and "not quite real piano" audio — traced to domain mismatch:
+the base checkpoint saw only MAESTRO's real Steinway recordings, while much
+of our traffic (and all our benchmarks) is synthesized/digital-piano timbre.
+Fix: fine-tuned the deployed Note_pedal model (`training/finetune_modal.py`,
+A10G, 3000 steps, lr 1e-4) on FluidSynth-rendered audio from cleanly-licensed
+MIDI — 8 pieces × 2 soundfonts (6 Mutopia Chopin + the user's expressive
+étude performance + the user's jazz ballad), with gain/noise augmentation.
+
+Honest A/B on 3 pieces excluded from training entirely (op10_no9, waltz
+op64/1, ballade 4; both soundfonts; identical audio through both
+checkpoints — `scripts/ab_eval_checkpoints.py`):
+
+| Average of 6 runs | base | fine-tuned |
+|---|---|---|
+| Onset+pitch F1 | 0.954 | **0.973** |
+| +offset | 0.550 | **0.682** |
+| +velocity | 0.407 | **0.485** |
+
+Improved on every piece/soundfont/metric row (one velocity cell dipped
+0.502→0.477; its sibling soundfont row rose 0.420→0.497). Deployed as
+`note_pedal_ft_v1.pth`; the base checkpoint remains on the volume and
+reverting is a one-line change in `modal_app/app.py`.
+
+**Known risk, unmeasured**: all fine-tuning audio was synthetic. Quality on
+*real* piano recordings could in principle regress (catastrophic
+forgetting was mitigated with low LR + short training, but we have no
+aligned real-recording ground truth to measure with). If real-recording
+quality drops in practice, revert and revisit with mixed data.
+
 ## Open questions
 
 - Need more aligned audio+MIDI pairs (easy AND hard cases) before touching

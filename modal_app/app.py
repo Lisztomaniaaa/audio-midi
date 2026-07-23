@@ -8,7 +8,13 @@ import base64
 
 import modal
 
-CHECKPOINT_FILENAME = "note_F1=0.9677_pedal_F1=0.9186.pth"
+# Fine-tuned from the Kong et al. base checkpoint on FluidSynth-rendered
+# audio (training/finetune_modal.py) to fix hallucinated/dropped notes on
+# synthetic/non-"real piano" timbres. Held-out A/B (3 pieces never seen in
+# training, 2 soundfonts): onset+pitch F1 0.954->0.973, +offset 0.550->0.682,
+# +velocity 0.407->0.485. The base checkpoint stays on the volume — revert by
+# switching this name back to "note_F1=0.9677_pedal_F1=0.9186.pth".
+CHECKPOINT_FILENAME = "note_pedal_ft_v1.pth"
 CHECKPOINT_DIR = "/checkpoints"
 
 image = (
