@@ -128,6 +128,46 @@ VOICE_MAX_JUMP = 16  # max pitch jump (semitones) to keep notes in one voice
 DUPLICATE_PITCH_WINDOW_S = 0.05  # one physical key can't re-strike faster than this
 MAX_SIMULTANEOUS_OCTAVES_SAME_CLASS = 2  # 2-hand octave doubling is common; 3+ is harmonic bleed, not a 3-octave unison
 
+# Pedal event extraction from the model's own raw per-frame confidence
+# (`pedal_frame_output`), instead of trusting its already-binarized on/off
+# events. Found via testing (a continuous-pedal "wash" style piece, common in
+# lo-fi/TikTok-style covers, not just conventionally-repedaled classical
+# playing): confidence genuinely dips right at the start of a long pedal-down
+# span (before overlapping/ringing notes build up enough resonance to be
+# audible as "pedal"), and the library's fixed thresholding fragments that
+# into several spurious on/off events instead of one continuous span.
+# PEDAL_GAP_MERGE_S is deliberately small: real frequent pedaling (e.g. a
+# waltz re-pedaling every beat) has genuine gaps as short as ~0.08s between
+# lifts, so anything close to that would erase real pedal changes, not just
+# flicker.
+PEDAL_ON_THRESHOLD = 0.5
+PEDAL_OFF_THRESHOLD = 0.3
+PEDAL_GAP_MERGE_S = 0.05
+PEDAL_FRAMES_PER_SECOND = 100
+
+
+def _extract_pedal_events(raw_pedal_frame) -> list:
+    active = False
+    start = None
+    events = []
+    for i, p in enumerate(raw_pedal_frame):
+        if not active and p >= PEDAL_ON_THRESHOLD:
+            active = True
+            start = i
+        elif active and p < PEDAL_OFF_THRESHOLD:
+            active = False
+            events.append((start / PEDAL_FRAMES_PER_SECOND, i / PEDAL_FRAMES_PER_SECOND))
+    if active:
+        events.append((start / PEDAL_FRAMES_PER_SECOND, len(raw_pedal_frame) / PEDAL_FRAMES_PER_SECOND))
+
+    merged = []
+    for onset, offset in events:
+        if merged and onset - merged[-1][1] <= PEDAL_GAP_MERGE_S:
+            merged[-1] = (merged[-1][0], offset)
+        else:
+            merged.append((onset, offset))
+    return [{"onset": round(o, 3), "offset": round(f, 3)} for o, f in merged]
+
 # Glissando: a long, fast, one-directional, mostly-stepwise run.
 GLISS_MIN_NOTES = 6
 GLISS_MAX_IOI = 0.12  # seconds between consecutive notes (fast)
@@ -1170,10 +1210,7 @@ class PianoTranscriber:
             }
             for ev in transcribed["est_note_events"]
         ]
-        pedals = [
-            {"onset": float(ev["onset_time"]), "offset": float(ev["offset_time"])}
-            for ev in transcribed["est_pedal_events"]
-        ]
+        pedals = _extract_pedal_events(transcribed["output_dict"]["pedal_frame_output"][:, 0])
 
         notes = _prune_implausible_notes(notes)
         notes = _refine_note_offsets(y, notes, pedals)
@@ -1298,6 +1335,7 @@ class PianoTranscriber:
         transcribed = self.transcriptor.transcribe(y, None)
         self.transcriptor.onset_threshold = orig_onset
         self.transcriptor.frame_threshold = orig_frame
+        raw_pedal_frame = transcribed["output_dict"]["pedal_frame_output"][:, 0].tolist()
         notes = [
             {
                 "pitch": int(ev["midi_note"]),
@@ -1307,7 +1345,16 @@ class PianoTranscriber:
             }
             for ev in transcribed["est_note_events"]
         ]
-        return {"notes": notes, "audio": y.tolist()}
+        pedal_events = [
+            {"onset": float(ev["onset_time"]), "offset": float(ev["offset_time"])}
+            for ev in transcribed["est_pedal_events"]
+        ]
+        return {
+            "notes": notes,
+            "audio": y.tolist(),
+            "pedal_events": pedal_events,
+            "raw_pedal_frame": raw_pedal_frame,
+        }
 
 
 @app.function(secrets=[api_key_secret])

@@ -223,6 +223,38 @@ forgetting was mitigated with low LR + short training, but we have no
 aligned real-recording ground truth to measure with). If real-recording
 quality drops in practice, revert and revisit with mixed data.
 
+## Pedal event extraction rebuilt on raw per-frame confidence
+
+User-reported theory (both points sound, not contradictory): (1) train on
+continuous-pedal "wash" style playing (common in lo-fi/TikTok-style covers,
+not just conventionally-repedaled classical technique) since the model
+rarely sees that pattern; (2) don't trust audio-only pedal detection as
+absolute — corroborate with other signal, the same principle already used
+for meter inference (note-accent fallback when downbeat tracking is
+unreliable).
+
+Investigated point 2 first since it didn't need a new training run. Built a
+continuous-pedal test file (pedal down 0-19.5s solid, notes throughout) and
+found the model's own raw per-frame confidence (`output_dict[
+'pedal_frame_output']`, previously discarded — we only read the library's
+already-binarized `est_pedal_events`) is genuinely high (0.8-0.997) across
+nearly the whole span. But the library's fixed thresholding fragmented that
+into 5 spurious on/off events, because confidence legitimately dips right at
+the very start (before overlapping notes build enough audible resonance).
+
+Replaced pedal extraction with our own hysteresis + gap-merge over the raw
+per-frame confidence (`_extract_pedal_events`, on=0.5/off=0.3/merge-gaps
+<=0.05s). Deliberately conservative on the merge window: checked real
+frequent pedaling (the Chopin waltz, which re-pedals close to every beat)
+and found genuine gaps as short as ~0.08s between lifts — a merge threshold
+anywhere near that would erase real pedal changes, not just flicker, so
+0.05s was chosen specifically to stay clear of that (confirmed: only 1 of
+92 real waltz pedal events touched, vs full removal on the sustained test).
+
+Point 1 (training data) not yet done — flagging as the follow-up once this
+post-processing angle is validated in production, since it targets the same
+underlying gap from a different, larger-effort angle (actual retraining).
+
 ## Open questions
 
 - Need more aligned audio+MIDI pairs (easy AND hard cases) before touching
