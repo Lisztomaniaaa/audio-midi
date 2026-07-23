@@ -61,6 +61,20 @@ official hosting page before use**, the same diligence MAESTRO just failed:
   hardest to source cleanly — probably synthetic-audio-from-MIDI is the
   only realistic clean path here too.
 
+## Ragtime and waltz: now in the fine-tuning data (note_pedal_ft_v2)
+
+Round 2 fine-tuning (see `02-bad-audio-robustness.md`) added 3 ragtime pieces
+(Joplin: Maple Leaf Rag, The Entertainer, Original Rags) and 4 waltzes
+(Brahms Op.39 Nos. 10 & 15, Strauss's Blue Danube theme, Spagnoletti's
+Farnham Waltz) — all Mutopia, CC-licensed, rendered via FluidSynth (same
+clean-audio-from-MIDI approach as the classical benchmark, sidesteps
+recording-rights entirely). Deployed as `note_pedal_ft_v2.pth`, held-out A/B
+showed genuine improvement on the waltz benchmark piece (op64/1, excluded
+from training) with no regression elsewhere.
+
+Jazz/bossa nova/anime/pop remain unaddressed — no safe data source
+identified yet for those beyond what's noted above.
+
 ## Open questions before starting
 
 - Per-genre or unified fine-tune? (Per-genre risks overfitting/catastrophic

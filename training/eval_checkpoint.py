@@ -57,3 +57,30 @@ def transcribe_raw(audio_b64: str, checkpoint_name: str) -> list:
         }
         for ev in result["est_note_events"]
     ]
+
+
+@app.function(gpu="T4", timeout=1800, volumes={CHECKPOINT_DIR: checkpoint_volume})
+def transcribe_raw_pedal(audio_b64: str, checkpoint_name: str) -> list:
+    """Same as transcribe_raw but returns the raw per-frame pedal confidence
+    instead of note events, for testing pedal-extraction logic offline."""
+    import base64
+    import os
+    import tempfile
+
+    import librosa
+    import torch
+    from piano_transcription_inference import PianoTranscription
+
+    transcriptor = PianoTranscription(
+        device="cuda" if torch.cuda.is_available() else "cpu",
+        checkpoint_path=os.path.join(CHECKPOINT_DIR, checkpoint_name),
+    )
+
+    audio_bytes = base64.b64decode(audio_b64)
+    with tempfile.NamedTemporaryFile(suffix=".audio") as tmp:
+        tmp.write(audio_bytes)
+        tmp.flush()
+        y, _ = librosa.load(tmp.name, sr=16000, mono=True)
+
+    result = transcriptor.transcribe(y, None)
+    return result["output_dict"]["pedal_frame_output"][:, 0].tolist()

@@ -10,11 +10,19 @@ import modal
 
 # Fine-tuned from the Kong et al. base checkpoint on FluidSynth-rendered
 # audio (training/finetune_modal.py) to fix hallucinated/dropped notes on
-# synthetic/non-"real piano" timbres. Held-out A/B (3 pieces never seen in
-# training, 2 soundfonts): onset+pitch F1 0.954->0.973, +offset 0.550->0.682,
-# +velocity 0.407->0.485. The base checkpoint stays on the volume — revert by
-# switching this name back to "note_F1=0.9677_pedal_F1=0.9186.pth".
-CHECKPOINT_FILENAME = "note_pedal_ft_v1.pth"
+# synthetic/non-"real piano" timbres. Round 1 held-out A/B (3 pieces never
+# seen in training, 2 soundfonts) vs base: onset+pitch F1 0.954->0.973,
+# +offset 0.550->0.682, +velocity 0.407->0.485.
+# Round 2 (v2) continued fine-tuning from v1, adding ragtime/waltz coverage
+# and continuous-pedal ("full sustain") examples. v1->v2 on the same held-out
+# set: onset+pitch 0.973->0.971 (flat), +offset 0.682->0.719, +velocity
+# 0.485->0.502 — plus it fixes a real bug: on a held-out full-sustain test
+# clip, v1 fragmented one continuous 20s pedal-down into two events with a
+# spurious ~0.7s gap near the start; v2 detects it as a single continuous
+# span. The base and v1 checkpoints both stay on the volume — revert by
+# switching this name back to "note_pedal_ft_v1.pth" or
+# "note_F1=0.9677_pedal_F1=0.9186.pth".
+CHECKPOINT_FILENAME = "note_pedal_ft_v2.pth"
 CHECKPOINT_DIR = "/checkpoints"
 
 image = (

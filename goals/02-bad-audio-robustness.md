@@ -255,6 +255,59 @@ Point 1 (training data) not yet done — flagging as the follow-up once this
 post-processing angle is validated in production, since it targets the same
 underlying gap from a different, larger-effort angle (actual retraining).
 
+## Round 2 fine-tune deployed (note_pedal_ft_v2) — ragtime/waltz + full-sustain
+
+Continued fine-tuning from `note_pedal_ft_v1.pth` (not from scratch —
+`training/finetune_modal.py` now takes `--start-checkpoint`), 2000 steps,
+A10G, adding:
+
+- 3 ragtime pieces (Joplin: Maple Leaf Rag, The Entertainer, Original Rags —
+  Mutopia, already downloaded for genre-coverage work) and 4 new waltzes
+  (Brahms Op.39 Nos. 10 & 15, Strauss's Blue Danube theme, Spagnoletti's
+  Farnham Waltz — Mutopia, CC-licensed) — the held-out waltz benchmark piece
+  (op64/1) excluded.
+- 4 continuous-pedal ("full sustain") variants (`chopin_op10_no1`,
+  `chopin_op10_no5`, `maple`, `entertainer`) — a small script strips all CC64
+  events from the MIDI and replaces them with pedal-down-at-start /
+  pedal-up-at-very-end, addressing user point 1 above (the model needs to see
+  this playing style in training, not just in post-processing).
+- 38 total wav/mid pairs (16 round-1 + 22 new), both soundfonts.
+
+Held-out A/B, v1 vs v2, same 3 pieces/2 soundfonts as round 1
+(`scripts/ab_eval_checkpoints.py --base-checkpoint note_pedal_ft_v1.pth
+--ft-checkpoint note_pedal_ft_v2.pth`):
+
+| Average of 6 runs | v1 | v2 |
+|---|---|---|
+| Onset+pitch F1 | 0.973 | 0.971 (flat, within noise) |
+| +offset | 0.682 | **0.719** |
+| +velocity | 0.485 | **0.502** |
+
+No regression on onset/pitch; +offset and +velocity both improved, most
+visibly on the waltz piece (+offset 0.641→0.683 and 0.693→0.778 across the
+two soundfonts) — the genre this round specifically targeted.
+
+**Full-sustain fix confirmed on a held-out synthetic test** (20s clip, pedal
+down for the entire duration, never used in training): v1's raw pedal-frame
+confidence still dipped below the off-threshold for ~0.7s near the start,
+fragmenting one continuous pedal event into two (`0.0-0.71`, `1.42-19.99`).
+v2 produces a single continuous event (`1.89-19.32`) — no spurious mid-
+passage break, confirming training on continuous-pedal examples fixes the
+fragmentation directly rather than only papering over it with hysteresis.
+Trade-off: v2 is slightly more conservative at the true start/end of the
+pedal span (misses ~1.9s at the start, ~0.7s at the end) versus v1's closer
+but fragmented coverage — reasonable, since a false split mid-passage is a
+worse user-visible artifact than slightly late/early boundary detection.
+
+Deployed as `CHECKPOINT_FILENAME = "note_pedal_ft_v2.pth"` in
+`modal_app/app.py`; v1 and the original base checkpoint both remain on the
+volume, revert is a one-line change.
+
+**Point 2 (don't trust audio-only pedal detection as absolute) is still
+unaddressed** — this round only fixes point 1 (training data). Corroborating
+pedal state with structural signal (tempo/beat, phrase boundaries) is a
+separate, not-yet-designed piece of work.
+
 ## Open questions
 
 - Need more aligned audio+MIDI pairs (easy AND hard cases) before touching
